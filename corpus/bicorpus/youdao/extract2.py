@@ -75,13 +75,13 @@ def extract_longman(json): # -> Generator[(str, str)]:
         if 'EXAMPLE' in sense:
             ens = remove_html_tag(sense['EXAMPLE'])
             zhs = remove_html_tag(sense['EXAMPLETRAN'])
-            yield from zip(ens, zhs)
+            yield from [(en, zh, 'longman') for en, zh in zip(ens, zhs)]
 
     for sub_sense in helper(json, ['longman', 'wordList', 'Entry', 'Sense', 'Subsense']):
         if 'EXAMPLE' in sub_sense:
             ens = remove_html_tag(sub_sense['EXAMPLE'])
             zhs = remove_html_tag(sub_sense['EXAMPLETRAN'])
-            yield from zip(ens, zhs)
+            yield from [(en, zh, 'longman') for en, zh in zip(ens, zhs)]
 
 
 def extract_splongman(json): # -> Generator[(str, str)]:
@@ -89,13 +89,13 @@ def extract_splongman(json): # -> Generator[(str, str)]:
         if 'EXAMPLE' in sense:
             ens = remove_html_tag(sense['EXAMPLE'])
             zhs = remove_html_tag(sense['EXAMPLETRAN'])
-            yield from zip(ens, zhs)
+            yield from [(en, zh, 'splongman') for en, zh in zip(ens, zhs)]
 
     for sub_sense in helper(json, ['splongman', 'wordList', 'Entry', 'Sense', 'Subsense']):
         if 'EXAMPLE' in sub_sense:
             ens = remove_html_tag(sub_sense['EXAMPLE'])
             zhs = remove_html_tag(sub_sense['EXAMPLETRAN'])
-            yield from zip(ens, zhs)
+            yield from [(en, zh, 'splongman') for en, zh in zip(ens, zhs)]
 
 
 def extract_special(json): # -> Generator[(str, str, str)]:
@@ -124,14 +124,14 @@ def extract_phrase(json):
     for phrase in helper(json, ['phrs', 'phrs', 'phr']):
         en = phrase['headword']['l']['i']
         zh = ';;;'.join([t['tr']['l']['i'] for t in phrase['trs']])
-        yield (en, zh)
+        yield (en, zh, 'phrase')
 
 
 def extract_auth(json):
     for pair in helper(json, ['auth_sents', 'sent']):
         en = remove_html_tag(pair['foreign'])
         url = pair['url']
-        yield (en, url)
+        yield (en, url, 'auth')
 
 
 def extract_media(json):
@@ -166,6 +166,7 @@ def extract(input_dir, output_path, func):
                 except Exception as e:
                     print(str(e))
                     print('Failed to load json file {}'.format(file_path))
+
 
                 for pair in func(json):
                     output.write('\t'.join([str(x) for x in pair]) + '\n')

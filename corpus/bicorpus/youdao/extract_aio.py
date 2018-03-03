@@ -16,7 +16,7 @@ arg_parser = argparse.ArgumentParser()
 arg_parser.add_argument('--field',
                         type=str,
                         default='blng',
-                        help='field name. [blng, collins, ec21, longman, splongman, special, phrase, meida, auth]')
+                        help='field name. [blng, meida, auth]')
 
 
 def helper(json_data, fields):
@@ -81,46 +81,46 @@ def extract_media(json_data):
             en = remove_html_tag(pair['eng'])
             zh = remove_html_tag(pair['chn'])
             #url = pair['streamUrl']
-            yield (en, zh, 'media')
+            if len(en) > 0 and len(zh) > 0:
+                yield (en, zh, 'media')
 
-def list_all(fn, *args, **kwargs):
 
-    return list(fn(*args, **kwargs))
+hanzi = re.compile(
+    u'([^\u0000-\u007f\u00f1\u00e1\u00e9\u00ed\u00f3\u00fa\u00d1\u00c1\u00c9\u00cd\u00d3\u00da\u0410-\u044f\u0406\u0407\u040e\u0456\u0457\u045e])')
 
-async def extract(loop, func, filed):
-    #pool_executor = ProcessPoolExecutor(max_workers=10)
+def detect_zh(text):
+    zh_len = len(hanzi.findall(text))
+    return zh_len/len(text) > 0.2
+
+def correct(pairs):
+    for en, zh, url in pairs:
+        src_zh = detect_zh(en)
+        trg_zh = detect_zh(zh)
+        if src_zh:
+            yield zh, en, url
+        else:
+            yield en, zh, url
+
+
+async def extract(loop, func, field):
     conn_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf')
 
-    buffer = []
+    async with conn_pool.acquire() as reader:
+        async with conn_pool.acquire() as writer:
+            async with reader.transaction():
+                async for row in reader.cursor('SELECT data FROM youdao_bilingual'):
+                    data = json.loads(row['data'])
 
-    async with conn_pool.acquire() as select_conn:
-        async with select_conn.transaction():
-            async for row in select_conn.cursor('SELECT keyword, direction, data FROM youdao_bilingual'):
-                keyword = row['keyword']
-                direction = row['direction']
-                data = json.loads(row['data'])
-                #pair = await loop.run_in_executor(pool_executor, list_all, func, data)
-                #buffer.extend(pair)
-                buffer.extend(func(data))
-
-                if len(buffer) > 1000:
-                    async with conn_pool.acquire() as write_conn:
-                        async with write_conn.transaction():
-                            await write_conn.executemany('INSERT INTO ch2en (ch, en, url, source, field) VALUES ($1, $2, $3, $4, $5)',
-                                            [(ch, en, url, 'youdao', filed) for en, ch, url in buffer])
-                    buffer.clear()
-
-    if len(buffer) > 0:
-        async with conn_pool.acquire() as write_conn:
-            async with write_conn.transaction():
-                await write_conn.executemany('INSERT INTO ch2en (ch, en, url, source, filed) VALUES ($1, $2, $3, $4, %5)',
-                                             [(ch, en, url, 'youdao', filed) for en, ch, url in buffer])
-        buffer.clear()
+                    pairs = list(func(data))
+                    if len(pairs) > 0:
+                        async with writer.transaction():
+                            await writer.executemany('INSERT INTO ch2en (ch, en, url, source) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+                                            [(ch, en, url, 'youdao') for en, ch, url in correct(pairs)])
 
 
 field_mapping = {'blng': extract_blng_sents,
                  'media': extract_media,
-                 'auth': extract_auth
+                 #'auth': extract_auth
                  }
 
 

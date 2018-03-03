@@ -1,18 +1,12 @@
 #!/usr/bin/env python3.6
 # -*- coding: utf-8 -*-
 
-import sys, traceback
-import random
-import json
 import argparse
 from typing import List
-import asyncio
-from aiohttp import ClientSession
-import aiopg
 import asyncpg
 from tqdm import tqdm
-
-from .config import *
+from bs4 import BeautifulSoup
+from corpus.util.config import *
 
 headers = {
     'Connection': 'keep-alive',
@@ -43,65 +37,59 @@ async def delete_proxy(proxy):
         async with proxy_session.get(proxy_delete_url(proxy)) as proxy_response:
             pass
 
-def is_json(text: str) -> bool:
-    try:
-        text = json.loads(text)
-        if 'input' in text:
-            return True
-        else:
-            return False
-    except Exception:
-        return False
 
+def get_url(word, index):
+    return 'http://dj.iciba.com/%s-1-%d.html' % (word, index)
 
-async def fetch_data(keyword, try_times=1):
+def get_count(text):
+    html = BeautifulSoup(text, 'lxml')
+    script = html.find('script')
+    if script:
+        count = script.text[11:-1]
+        if count.isnumeric():
+            return int(count)
+
+    return -1
+
+async def fetch_data(keyword, index=1, try_times=1):
     if try_times > 10:
-        print("Warning: keyword %s has be fetched %d times" % (keyword, try_times-1))
-        return None
+        print('%s try times %d' % (keyword, try_times))
+        return ''
 
     proxy = await fetch_proxy()
     try:
+        total = 100
         proxy_url = "http://{}".format(proxy)
         async with ClientSession(headers=headers) as session:
-            async with session.get(get_url(keyword), proxy=proxy_url, timeout=10) as response:
+            async with session.get(get_url(keyword, index), proxy=proxy_url, timeout=10) as response:
+                print(get_url(keyword, index))
                 if response.status == 200:
                     text = await response.text()
-                    if is_json(text):
-                        return keyword, text
-                raise RuntimeError('raise for try again.')
+                    count = get_count(text)
+                    if count == -1:
+                        raise RuntimeError('Raise for retry.')
+                    total = min(total, (count + 9) // 10)
+                else:
+                    raise RuntimeError('Raise for retry.')
+
+        return text + await fetch_data(keyword, index+1) if index < total else text
     except BaseException as e:
         print(e)
         #traceback.print_exc(file=sys.stdout)
         #await delete_proxy(proxy)
-        return await fetch_data(keyword, try_times + 1)
+        return await fetch_data(keyword, index, try_times+1)
 
-
-async def fetch(keyword, direction, db_conn):
-    data = await fetch_data(keyword)
-    if data:
-        try:
-            async with db_conn.transaction():
-                await db_conn.execute("INSERT INTO youdao_bilingual (keyword, direction, data) VALUES ($1, $2, $3)",
-                                   keyword, direction, data)
-        except BaseException as e:
-            print(e)
-            #traceback.print_exc(file=sys.stdout)
+async def fetch(keyword):
+    return keyword, await fetch_data(keyword, 1)
 
 async def save(db_conn, buffer, direction):
     try:
         async with db_conn.transaction():
-            await db_conn.executemany("INSERT INTO youdao_bilingual (keyword, direction, data) VALUES ($1, $2, $3)",
+            await db_conn.executemany("INSERT INTO iciba (keyword, direction, data) VALUES ($1, $2, $3)",
                                       [(word, direction, data) for word, data in buffer])
     except BaseException as e:
         print(e)
         #traceback.print_exc(file=sys.stdout)
-
-
-async def save_aiopg(db_pool, buffer, direction):
-    async with db_pool.acquire() as conn:
-        async with conn.cursor() as cursor:
-            cursor.executemany("INSERT INTO youdao_bilingual (keyword, direction, data) VALUES (%s, %s, %s)",
-                               [(word, direction, data) for word, data in buffer])
 
 
 async def bound(sem: asyncio.Semaphore, func, *args, **kwargs):
@@ -111,18 +99,18 @@ async def bound(sem: asyncio.Semaphore, func, *args, **kwargs):
 
 async def main(keywords: List[str], direction: str):
     # create instance of Semaphore
-    sem = asyncio.Semaphore(200)
+    sem = asyncio.Semaphore(100)
 
     db_conn = await asyncpg.connect(host='localhost', user='sunqf', database='sunqf')
 
     async with db_conn.transaction():
-        records = await db_conn.fetch('SELECT keyword from youdao_bilingual')
+        records = await db_conn.fetch('SELECT keyword from iciba')
         db_words = set([r['keyword'] for r in records])
 
     keywords = [word for word in keywords if word not in db_words]
     batch_size = 10000
     for batch in tqdm(range(0, len(keywords), batch_size), total=len(keywords)//batch_size):
-        futures = [bound(sem, fetch_data, word, 1) for word in keywords[batch:batch+batch_size]]
+        futures = [bound(sem, fetch, word) for word in keywords[batch:batch+batch_size]]
         buffer = []
         for future in tqdm(asyncio.as_completed(futures), total=len(futures)):
             result = await future
@@ -130,7 +118,7 @@ async def main(keywords: List[str], direction: str):
                 print(result)
             else:
                 buffer.append(result)
-            if len(buffer) > 100:
+            if len(buffer) > 20:
                 await save(db_conn, buffer, direction)
                 buffer.clear()
         if len(buffer) > 0:
