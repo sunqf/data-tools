@@ -84,7 +84,6 @@ class BaseCrawler:
         self.type = type
         self.num_worker = num_workers
         self.url_queue = asyncio.PriorityQueue()
-        self.pending_urls = set()
         self.search_order = 2
         self.item_order = 1
         self.save_html_queue = asyncio.Queue()
@@ -120,24 +119,21 @@ class BaseCrawler:
     async def crawl_worker(self):
         while True:
             order, url = await self.url_queue.get()
-            self.pending_urls.remove(url)
             if url not in self.finished_urls:
                 try:
+                    self.finished_urls.add(url)
                     html = await get_html(url)
                     if html is not None:
                         if self.is_item_url(url):
                             await self.save_html_queue.put((url, html))
                         await self.save_url_queue.put(url)
-                        self.finished_urls.add(url)
 
                         for new_url in self.extract_links(url, html):
-                            if new_url not in self.finished_urls and new_url not in self.pending_urls:
+                            if new_url not in self.finished_urls:
                                 if self.is_item_url(new_url):
                                     await self.url_queue.put((self.item_order, self.format_url(new_url)))
-                                    self.pending_urls.add(self.format_url(new_url))
                                 elif self.is_search_url(new_url):
                                     await self.url_queue.put((self.search_order, new_url))
-                                    self.pending_urls.add(self.format_url(new_url))
 
                 except Exception as e:
                     print(url, e)
@@ -196,7 +192,7 @@ class BaseCrawler:
 
     @staticmethod
     async def db_connect():
-        return await asyncpg.connect(host='localhost', user='sunqf', database='sunqf', command_timeout=60)
+        return await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf', command_timeout=60)
 
     async def get_finished(self):
         writer = await self.db_connect()
@@ -245,6 +241,7 @@ class Hudong(BaseCrawler):
 
     def is_search_url(self, url) -> bool:
         return url.startswith('http://so.baike.com')
+
 
 if __name__ == '__main__':
     import argparse
