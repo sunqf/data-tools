@@ -5,7 +5,7 @@ import asyncpg
 from corpus.util.config import headers
 from bs4 import BeautifulSoup
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, TCPConnector
 import traceback
 from urllib.parse import urljoin
 from bs4 import UnicodeDammit
@@ -13,9 +13,6 @@ import functools
 from collections import namedtuple
 import time
 import logging
-
-logger = logging.getLogger('crawler')
-
 
 def statistics(func):
     class Info:
@@ -42,7 +39,7 @@ def statistics(func):
         res = await func(*args, **kwargs)
 
         if info.incr():
-            logger.info('{} speed: {} per second'.format(func, info.speed()))
+            print('{} speed: {} per second'.format(func, info.speed()))
 
         return res
     return wrapped
@@ -50,12 +47,13 @@ def statistics(func):
 
 @statistics
 async def get_html(url, timeout=10, max_try_times=10):
-    logger.debug(url)
+    print(url)
     try_time = 0
     while max_try_times < 0 or try_time < max_try_times:
         try_time += 1
         try:
-            async with ClientSession(headers=headers) as session:
+            connector = TCPConnector(limit=50)
+            async with ClientSession(connector=connector, headers=headers) as session:
                 async with session.get(url, timeout=timeout) as response:
                     if response.status == 200:
                         data = await response.read()
@@ -69,14 +67,14 @@ async def get_html(url, timeout=10, max_try_times=10):
                         return None
                     raise RuntimeError('raise for try again.')
         except UnicodeDecodeError as e:
-            logger.debug(url, e)
+            print(url, e)
             return None
         except Exception as e:
-            logger.debug(url, e)
+            print(url, e)
             traceback.print_exc()
             pass
 
-    logger.error('Getting %s exceed %d times.' % (url, try_time))
+    print('Getting %s exceed %d times.' % (url, try_time))
     return None
 
 
@@ -105,7 +103,7 @@ class BaseCrawler:
 
     async def init(self):
         # db_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf', command_timeout=60)
-        db_pool = await asyncpg.create_pool(host='192.168.0.11', user='sunqf', database='sunqf', command_timeout=60)
+        db_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf', command_timeout=60)
 
         async with db_pool.acquire() as writer:
             async with writer.transaction():

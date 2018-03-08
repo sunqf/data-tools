@@ -63,6 +63,7 @@ def transform(source_file_or_dir):
 
     for file in files:
         print(file)
+        prefix = file[len(source_file_or_dir):]
         file_size = os.path.getsize(file)
         with open(file, "rb") as f:
             try:
@@ -106,7 +107,7 @@ def transform(source_file_or_dir):
                         word_len = __read_unit16(f)
                         word_str = __read_utf16_str(f, -1, word_len)
                         f.read(12)
-                        yield word_str
+                        yield prefix + '\t' + word_str
             except KeyError:
                 pass
             except struct.error:
