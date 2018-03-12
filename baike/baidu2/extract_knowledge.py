@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.6
 # -*- coding: utf-8 -*-
 from bs4 import BeautifulSoup, Tag
-
+import zlib
 from urllib import parse
 from corpus.util.config import headers
 from collections import Iterable
@@ -9,6 +9,8 @@ import json
 import asyncio
 import asyncpg
 import traceback
+import concurrent
+from typing import Union, Iterable, AsyncIterable, Generator, AsyncGenerator
 
 
 type = 'baidu_baike'
@@ -111,34 +113,65 @@ def extract_text(html):
     html = build_tree(html)
     for div in html.select('div.para'):
         if len(div.text) > 30 and div.select_one('a[href]') is not None:
-            return json.dumps(div)
+            yield format_str(div)
 
 
-async def extract_all():
-    db_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf', command_timeout=60)
+queue = asyncio.Queue(maxsize=100)
 
-    with open('summary', 'w') as file:
-        async with db_pool.acquire() as reader, db_pool.acquire() as writer:
-            async with reader.transaction():
-                async for record in reader.cursor('SELECT url, html from baike_html where type=\'{}\''.format(type)):
-                    url = record['url']
-                    html = record['html']
+async def fetch_worker(batch_size):
+    reader = await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf', command_timeout=60)
+    batch = []
+    async with reader.transaction():
+        async for record in reader.cursor('SELECT url, html from baike_html2 where type=\'{}\''.format(type)):
+            url = record['url']
+            html = zlib.decompress(record['html'])
+            batch.append((url, record['html']))
+            if len(batch) >= batch_size:
+                await queue.put(batch)
+                batch = []
 
-                    print(url)
-                    try:
-                        knowledge = extract(html)
-                        if 'lemma_summary' in knowledge['attrs']:
-                            file.write(json.dumps(knowledge['attrs']['lemma_summary'], ensure_ascii=False) + '\n')
-                        #knowledge = json.dumps(knowledge, ensure_ascii=False)
-                        #await writer.executemany('INSERT INTO baike_knowledge (url, knowledge, type) VALUES ($1, $2, $3)',
-                        #                         [(url, knowledge, type)])
+        if len(batch) > 0:
+            await queue.put(batch)
 
-                    except Exception as e:
-                        print(url, e)
-                        print(knowledge)
-                        traceback.print_exc()
+def decomp_ext_comp(data):
+    res = []
+    for url, html in data:
+        html = zlib.decompress(html).decode()
+        # print(url)
+        try:
+            knowledge = extract(html)
+            knowledge = json.dumps(knowledge, ensure_ascii=False)
+            res.append((url, knowledge))
+        except Exception as e:
+            print(url, e)
+            traceback.print_exc()
+    return res
+
+
+async def extract_worker(loop, executor):
+    writer = await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf', command_timeout=60)
+    while True:
+        batch = await queue.get()
+        results = await loop.run_in_executor(executor, decomp_ext_comp, batch)
+        async with writer.transaction():
+            await writer.executemany(
+                'INSERT INTO baike_knowledge (url, knowledge, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                [(url, knowledge, type) for url, knowledge in results])
+        queue.task_done()
+
+async def run():
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ProcessPoolExecutor(max_workers=5) as executor:
+        source = asyncio.ensure_future(fetch_worker(batch_size=100))
+        tasks = [asyncio.ensure_future(extract_worker(loop, executor)) for i in range(5)]
+        await source
+        await queue.join()
+        await asyncio.sleep(300)
+        for task in tasks:
+            task.cancel()
+
 
 if __name__ == '__main__':
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(extract_all())
+    loop.run_until_complete(run())
