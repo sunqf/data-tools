@@ -138,7 +138,6 @@ class Queue:
     async def join(self):
         await self.queue.join()
 
-
 class BaseCrawler:
     def __init__(self, type, num_workers, decompose_selectors):
         self.type = type
@@ -186,10 +185,15 @@ class BaseCrawler:
                 try:
                     response_url, html = await get_html(self.client_session, url)
                     response_url = self.format_url(response_url)
-                    if response_url not in self.finished_urls and html:
+                    if html:
                         self.finished_urls.add(url)
-                        self.finished_urls.add(response_url)
-                        await self.html_queue.put((response_url, html))
+                        if url == response_url:
+                            await self.html_queue.put((url, html))
+                        else:
+                            await self.html_queue.put((url, None))
+                            if response_url not in self.finished_urls:
+                                self.finished_urls.add(response_url)
+                                await self.html_queue.put((response_url, html))
                 except Exception as e:
                     print(url, e)
                     traceback.print_exc()
@@ -216,11 +220,12 @@ class BaseCrawler:
                 data = []
                 async for url, html in self.get_batches(self.html_queue, 10):
                     urls.append(url)
-                    tree = BeautifulSoup(html, 'html.parser')
-                    await self.add_new_links(url, tree)
-                    if self.is_item_url(url):
-                        tree = decompose(tree, self.decompose_selectors)
-                        data.append((url, compress(str(tree))))
+                    if html:
+                        tree = BeautifulSoup(html, 'html.parser')
+                        await self.add_new_links(url, tree)
+                        if self.is_item_url(url):
+                            tree = decompose(tree, self.decompose_selectors)
+                            data.append((url, compress(str(tree))))
 
                 async with writer.transaction():
                     await writer.executemany(
@@ -287,7 +292,7 @@ class Baidu(BaseCrawler):
                            'div#side-share', 'div#layer', 'div.right-ad']
 
     def __init__(self):
-        super(Baidu, self).__init__('baidu_baike', num_workers=10, decompose_selectors=self.decompose_selectors)
+        super(Baidu, self).__init__('baidu_baike', num_workers=15, decompose_selectors=self.decompose_selectors)
 
     def format_keyword(self, word: str) -> str:
         return 'https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8'.format(word)
@@ -310,7 +315,7 @@ class Baidu(BaseCrawler):
                 async for record in reader.cursor(
                         'SELECT url, html, type from baike_html where type=\'{}\' and url NOT IN (SELECT url FROM baike_html2)'.format(
                             self.type), prefetch=200, timeout=1200):
-                    url = record['url']
+                    url = unquote(record['url'])
                     html = record['html']
                     type = record['type']
                     batch.append((url, html))
@@ -361,14 +366,16 @@ class Baidu(BaseCrawler):
                         traceback.print_exc()
 
         '''
+
+
 class Hudong(BaseCrawler):
-    decompose_selector = ['script', 'link', 'div.header-baike', 'div.header-search',
+    decompose_selectors = ['script', 'link', 'div.header-baike', 'div.header-search',
                           'div.point.l-he22.descriptionP', 'iframe', 'div.bklog', 'div.mainnav-wrap',
                           'div#renzheng', 'div.dialog_HDpopMsg'
                         ]
     def __init__(self):
         super(Hudong, self).__init__('hudong_baike',
-                                     num_workers=10,
+                                     num_workers=5,
                                      decompose_selectors=self.decompose_selectors)
 
     def format_keyword(self, word) -> str:
@@ -380,6 +387,44 @@ class Hudong(BaseCrawler):
     def is_search_url(self, url) -> bool:
         return url.startswith('http://so.baike.com')
 
+
+'''
+TODO:  360和sogou有限制，走代理可能可以解决。
+
+class Qihu(BaseCrawler):
+    decompose_selectors = ['']
+    def __init__(self):
+        super(Qihu, self).__init__('360_baike', num_workers=10, decompose_selectors=self.decompose_selectors)
+    
+    def format_keyword(self, word: str) -> str:
+        return 'https://baike.so.com/search/?q={}'.format(word)
+    
+    def is_item_url(self, url: str):
+        return url.startswith('https://baike.so.com/doc')
+    
+    def is_search_url(self, url: str):
+        return url.startswith('https://baike.so.com/search')
+    
+
+class Sogou(BaseCrawler):
+    decompose_selectors = ['']
+    def __init__(self):
+        super(Sogou, self).__init__('sogou_baike', num_workers=10, decompose_selectors=self.decompose_selectors)
+
+    def format_keyword(self, word: str) -> str:
+        return 'http://baike.sogou.com/Search.e?sp=S{}&sp=0'.format(word)
+
+    def is_item_url(self, url: str):
+        return url.startswith('http://baike.sogou.com/v')
+
+    def is_search_url(self, url: str):
+        return url.startswith('http://baike.sogou.com/Search')
+
+
+# 医学百科
+# https://www.wiki8.com
+# http://baike.molbase.cn/c1/
+'''
 
 if __name__ == '__main__':
     import argparse
@@ -395,8 +440,8 @@ if __name__ == '__main__':
 
     if args.type == 'baidu':
         crawler = Baidu()
-        #loop.run_until_complete(crawler.run(args.dict))
-        loop.run_until_complete(crawler.convert())
+        loop.run_until_complete(crawler.run(args.dict))
+        # loop.run_until_complete(crawler.convert())
     elif args.type == 'hudong':
         crawler = Hudong()
         loop.run_until_complete(crawler.run(args.dict))

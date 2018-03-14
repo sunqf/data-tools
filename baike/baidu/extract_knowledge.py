@@ -42,6 +42,8 @@ def check_type(data, checked):
         for item in data:
             check_type(item, checked)
 
+def format_attr_name(word: str) -> str:
+    return word.replace('\xa0', '').strip()
 
 def extract(html: str):
     html = build_tree(html)
@@ -72,9 +74,9 @@ def extract(html: str):
         if summary:
             attrs['lemma_summary'] = format_str(summary)
 
-        base_info = [{tag.dt.text.strip(): format_str(tag.dd)} for tag in poster_tag.select('dl-baseinfo')]
-        if len(base_info) > 0:
-            attrs['base_info'] = base_info
+        infobox = [{format_attr_name(tag.dt.text): format_str(tag.dd)} for tag in poster_tag.select('dl-baseinfo')]
+        if len(infobox) > 0:
+            attrs['infobox'] = infobox
 
     if 'lemma_title' not in attrs:
         lemma_title = html.select_one('dd.lemmaWgt-lemmaTitle-title > h1')
@@ -86,12 +88,12 @@ def extract(html: str):
         if lemma_summary:
             attrs['lemma_summary'] = format_str(lemma_summary)
 
-    if 'base_info' not in attrs:
-        names = [tag.text.strip() for tag in html.select('dt.basicInfo-item')]
+    if 'infobox' not in attrs:
+        names = [format_attr_name(tag.text) for tag in html.select('dt.basicInfo-item')]
         values = [format_str(tag) for tag in html.select('dd.basicInfo-item')]
-        base_info = {name: value for name, value in zip(names, values)}
-        if len(base_info) > 0:
-            attrs['base_info'] = base_info
+        infobox = {name: value for name, value in zip(names, values)}
+        if len(infobox) > 0:
+            attrs['infobox'] = infobox
 
 
     # todo 是否锁定， 投票计数, 浏览次数
@@ -103,7 +105,7 @@ def extract(html: str):
 
     open_tags = html.select_one('#open-tag-item')
     if open_tags:
-        attrs['open_tags'] = open_tags.text.split('，')
+        attrs['open_tags'] = [t.strip() for t in open_tags.text.split('，')]
 
     check_type(attrs, Tag)
     return {'title': title, 'keywords': keywords, 'attrs': attrs}
@@ -155,7 +157,7 @@ async def extract_worker(loop, executor):
         results = await loop.run_in_executor(executor, decomp_ext_comp, batch)
         async with writer.transaction():
             await writer.executemany(
-                'INSERT INTO baike_knowledge (url, knowledge, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                'INSERT INTO baike_knowledge2 (url, knowledge, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
                 [(url, knowledge, type) for url, knowledge in results])
         queue.task_done()
 
