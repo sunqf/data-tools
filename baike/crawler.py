@@ -113,16 +113,20 @@ def extract_and_compress(data: list,
     for url, html in data:
         save_urls.append(url)
         if html:
-            tree = BeautifulSoup(html, 'html.parser')
-            for new_url in extract_links(url, tree):
-                if new_url.startswith(item_prefix):
-                    new_urls.add((ITEM_ORDER, new_url))
-                elif new_url.startswith(search_prefix):
-                    new_urls.add((SEARCH_ORDER, new_url))
+            try:
+                tree = BeautifulSoup(html, 'html.parser')
+                for new_url in extract_links(url, tree):
+                    if new_url.startswith(item_prefix):
+                        new_urls.add((ITEM_ORDER, new_url))
+                    elif new_url.startswith(search_prefix):
+                        new_urls.add((SEARCH_ORDER, new_url))
 
-            if url.startswith(item_prefix):
-                tree = decompose(tree, decompose_selectors)
-                save_htmls.append((url, compress(str(tree))))
+                if url.startswith(item_prefix):
+                    tree = decompose(tree, decompose_selectors)
+                    save_htmls.append((url, compress(str(tree))))
+            except Exception as e:
+                print(url, e)
+                traceback.print_exc()
 
     return save_urls, save_htmls, new_urls
 
@@ -244,16 +248,18 @@ class BaseCrawler:
                     if url not in self.finished_urls:
                         await self.url_queue.put((order, url))
 
-                async with writer.transaction():
-                    await writer.executemany(
-                        "INSERT INTO finished_url (url, type) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                        [(url, self.type) for url in save_urls])
-
                 if len(save_htmls) > 0:
                     async with writer.transaction():
                         await writer.executemany(
                             "INSERT INTO baike_html2 (html, url, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
                             [(html, url, self.type) for url, html in save_htmls])
+
+                async with writer.transaction():
+                    await writer.executemany(
+                        "INSERT INTO finished_url (url, type) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        [(url, self.type) for url in save_urls])
+
+
 
             except Exception as e:
                 print(e)
