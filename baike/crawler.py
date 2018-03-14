@@ -15,6 +15,9 @@ import concurrent
 from corpus.util.config import headers
 from urllib.parse import unquote
 
+ITEM_ORDER = 1
+SEARCH_ORDER = 2
+
 
 def statistics(func):
     class Info:
@@ -100,20 +103,29 @@ def extract_links(url, html: Tag) -> Set[str]:
         return set()
 
 
-def compress_func(batch, selectors: List[str]):
-    res = []
-    links = set()
-    for url, html in batch:
-        try:
-            html = BeautifulSoup(html, 'html.parser')
-            links.update(extract_links(url, html))
-            html = decompose(html, selectors)
-            res.append((url, compress(str(html))))
-        except Exception as e:
-            print(url, e)
-            traceback.print_exc()
+def extract_and_compress(data: list,
+                         item_prefix: str,
+                         search_prefix: str,
+                         decompose_selectors: List[str]):
+    save_urls = []
+    save_htmls = []
+    new_urls = set()
+    for url, html in data:
+        save_urls.append(url)
+        if html:
+            tree = BeautifulSoup(html, 'html.parser')
+            for new_url in extract_links(url, tree):
+                if new_url.startswith(item_prefix):
+                    new_urls.add((ITEM_ORDER, new_url))
+                elif new_url.startswith(search_prefix):
+                    new_urls.add((SEARCH_ORDER, new_url))
 
-    return res
+            if url.startswith(item_prefix):
+                tree = decompose(tree, decompose_selectors)
+                save_htmls.append((url, compress(str(tree))))
+
+    return save_urls, save_htmls, new_urls
+
 
 class Queue:
     def __init__(self, priority=True):
@@ -138,45 +150,39 @@ class Queue:
     async def join(self):
         await self.queue.join()
 
+
 class BaseCrawler:
-    def __init__(self, type, num_workers, decompose_selectors):
+    def __init__(self, type, keyword_format, search_prefix, item_prefix, num_workers, decompose_selectors):
         self.type = type
+        self.keyword_format = keyword_format
+        self.search_prefix = search_prefix
+        self.item_prefix = item_prefix
         self.num_worker = num_workers
         self.decompose_selectors = decompose_selectors
         self.url_queue = Queue(priority=True)
-        self.search_order = 2
-        self.item_order = 1
         self.html_queue = asyncio.Queue()
+        self.save_queue = asyncio.Queue()
         self.finished_urls = set()
 
         self.client_session = None
 
     def format_keyword(self, word: str) -> str:
-        raise NotImplementedError()
+        return self.keyword_format.format(word)
 
     def is_item_url(self, url: str) -> bool:
-        raise NotImplementedError()
+        return url.startswith(self.item_prefix)
 
     def is_search_url(self, url: str) -> bool:
-        raise NotImplementedError()
+        return url.startswith(self.search_prefix)
 
     def format_url(self, url: str) -> str:
         return unquote(url.split('#')[0].split('?')[0] if self.is_item_url(url) else url)
-
-    async def add_new_links(self, url: str, html: Tag):
-        for new_url in extract_links(url, html):
-            new_url = self.format_url(new_url)
-            if new_url not in self.finished_urls:
-                if self.is_item_url(new_url):
-                    await self.url_queue.put((self.item_order, new_url))
-                elif self.is_search_url(new_url):
-                    await self.url_queue.put((self.search_order, new_url))
 
     async def put_keywords(self, dict_path):
         for word in self.get_keywords(dict_path):
             url = self.format_keyword(word)
             if url not in self.finished_urls:
-                await self.url_queue.put((self.search_order, url))
+                await self.url_queue.put((SEARCH_ORDER, url))
 
     async def crawl_worker(self):
         while True:
@@ -201,60 +207,74 @@ class BaseCrawler:
 
     @staticmethod
     async def get_batches(queue: asyncio.Queue, batch_size: int):
+        batch = []
         for i in range(batch_size):
             if i == 0:
-                yield await queue.get()
+                batch.append(await queue.get())
                 queue.task_done()
             else:
                 try:
-                    yield queue.get_nowait()
+                    batch.append(queue.get_nowait())
                     queue.task_done()
                 except asyncio.QueueEmpty:
-                    return
+                    break
 
-    async def save_html_worker(self):
+        return batch
+
+    async def compress_worker(self, loop, executor):
+        while True:
+            try:
+                batch = await self.get_batches(self.html_queue, 20)
+                future = loop.run_in_executor(executor,
+                                              extract_and_compress,
+                                              batch, self.item_prefix, self.search_prefix, self.decompose_selectors)
+                await self.save_queue.put(future)
+            except Exception as e:
+                print(e)
+                traceback.print_exc()
+
+    async def save_worker(self):
         writer = await self.db_connect()
         while True:
             try:
-                urls = []
-                data = []
-                async for url, html in self.get_batches(self.html_queue, 10):
-                    urls.append(url)
-                    if html:
-                        tree = BeautifulSoup(html, 'html.parser')
-                        await self.add_new_links(url, tree)
-                        if self.is_item_url(url):
-                            tree = decompose(tree, self.decompose_selectors)
-                            data.append((url, compress(str(tree))))
+                future = await self.save_queue.get()
+                save_urls, save_htmls, new_urls = await future
+                for order, url in new_urls:
+                    url = self.format_url(url)
+                    if url not in self.finished_urls:
+                        await self.url_queue.put((order, url))
 
                 async with writer.transaction():
                     await writer.executemany(
-                        "INSERT INTO finished_url (url, type) VALUES ($1, $2)",
-                        [(url, self.type) for url in urls])
+                        "INSERT INTO finished_url (url, type) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        [(url, self.type) for url in save_urls])
 
-                if len(data) > 0:
+                if len(save_htmls) > 0:
                     async with writer.transaction():
                         await writer.executemany(
-                            "INSERT INTO baike_html2 (html, url, type) VALUES ($1, $2, $3)",
-                            [(html, url, self.type) for url, html in data])
+                            "INSERT INTO baike_html2 (html, url, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                            [(html, url, self.type) for url, html in save_htmls])
 
             except Exception as e:
                 print(e)
                 traceback.print_exc()
 
-    async def run(self, dict_path: str):
+            self.save_queue.task_done()
+
+    async def run(self, dict_path: str, loop):
         self.client_session = ClientSession(headers=headers)
         await self.get_finished()
 
         source = asyncio.ensure_future(self.put_keywords(dict_path))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            tasks = [asyncio.ensure_future(self.save_html_worker()),
+        with concurrent.futures.ProcessPoolExecutor(max_workers=5) as executor:
+            tasks = [asyncio.ensure_future(self.compress_worker(loop, executor)),
+                     asyncio.ensure_future(self.save_worker()),
                      *[asyncio.ensure_future(self.crawl_worker()) for _ in range(self.num_worker)]]
 
             await source
             await self.url_queue.join()
             await self.html_queue.join()
-
+            await self.save_queue.join()
             for task in tasks:
                 task.cancel()
 
@@ -292,100 +312,26 @@ class Baidu(BaseCrawler):
                            'div#side-share', 'div#layer', 'div.right-ad']
 
     def __init__(self):
-        super(Baidu, self).__init__('baidu_baike', num_workers=15, decompose_selectors=self.decompose_selectors)
-
-    def format_keyword(self, word: str) -> str:
-        return 'https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8'.format(word)
-
-    def is_item_url(self, url: str) -> bool:
-        return url.startswith('https://baike.baidu.com/item')
-
-    def is_search_url(self, url: str):
-        return url.startswith('https://baike.baidu.com/search')
-
-    async def convert(self):
-        loop = asyncio.get_event_loop()
-
-        batches = asyncio.Queue(maxsize=1000)
-        async def get_batches():
-            reader = await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf',
-                                           command_timeout=60)
-            async with reader.transaction():
-                batch = []
-                async for record in reader.cursor(
-                        'SELECT url, html, type from baike_html where type=\'{}\' and url NOT IN (SELECT url FROM baike_html2)'.format(
-                            self.type), prefetch=200, timeout=1200):
-                    url = unquote(record['url'])
-                    html = record['html']
-                    type = record['type']
-                    batch.append((url, html))
-                    if len(batch) > 10:
-                        await batches.put(batch)
-                        batch = []
-
-                if len(batch) > 0:
-                    await batches.put(batch)
-
-        async def compress_worker(executor):
-            writer = await asyncpg.connect(host='192.168.0.11', user='sunqf', password='840422', database='sunqf',
-                                           command_timeout=60)
-            while True:
-                batch = await batches.get()
-                comp_batch = await loop.run_in_executor(executor, compress_func, batch, self.decompose_selectors)
-                async with writer.transaction():
-                    await writer.executemany("INSERT INTO baike_html2 (html, url, type) VALUES ($1, $2, $3)  ON CONFLICT DO NOTHING",
-                                             [(html, url, self.type) for url, html in comp_batch])
-                batches.task_done()
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=5) as executor:
-            source = asyncio.ensure_future(get_batches())
-            tasks = [asyncio.ensure_future(compress_worker(executor)) for i in range(10)]
-
-            await source
-            for task in tasks:
-                task.cancel()
-
-        '''
-        async with reader.transaction():
-            async for record in reader.cursor(
-                    'SELECT url, html, type from baike_html where type=\'{}\' and url NOT IN (SELECT url FROM baike_html2)'.format(self.type)):
-                url = record['url']
-                html = record['html']
-                type = record['type']
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                    try:
-                        html = BeautifulSoup(html, 'html.parser')
-                        html = self.decompose(html)
-
-                        async with writer.transaction():
-                            await writer.executemany("INSERT INTO baike_html2 (html, url, type) VALUES ($1, $2, $3)",
-                                            [(self.compress(str(html)), url, self.type)])
-                    except Exception as e:
-                        print(url, e)
-                        traceback.print_exc()
-
-        '''
+        super(Baidu, self).__init__(type='baidu_baike',
+                                    keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
+                                    search_prefix='https://baike.baidu.com/search',
+                                    item_prefix='https://baike.baidu.com/item',
+                                    num_workers=5, decompose_selectors=self.decompose_selectors)
 
 
 class Hudong(BaseCrawler):
     decompose_selectors = ['script', 'link', 'div.header-baike', 'div.header-search',
-                          'div.point.l-he22.descriptionP', 'iframe', 'div.bklog', 'div.mainnav-wrap',
-                          'div#renzheng', 'div.dialog_HDpopMsg'
+                           'div.point.l-he22.descriptionP', 'iframe', 'div.bklog', 'div.mainnav-wrap',
+                           'div#renzheng', 'div.dialog_HDpopMsg'
                         ]
     def __init__(self):
-        super(Hudong, self).__init__('hudong_baike',
+        super(Hudong, self).__init__(type='hudong_baike',
+                                     keyword_format='http://so.baike.com/doc/{}&prd=button_doc_search',
+                                     search_prefix='http://so.baike.com',
+                                     item_prefix='http://www.baike.com/wiki',
                                      num_workers=5,
                                      decompose_selectors=self.decompose_selectors)
 
-    def format_keyword(self, word) -> str:
-        return 'http://so.baike.com/doc/{}&prd=button_doc_search'.format(word)
-
-    def is_item_url(self, url) -> bool:
-        return url.startswith('http://www.baike.com/wiki')
-
-    def is_search_url(self, url) -> bool:
-        return url.startswith('http://so.baike.com')
 
 
 '''
@@ -434,15 +380,15 @@ if __name__ == '__main__':
 
     args = arg_parser.parse_args()
 
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     loop = asyncio.get_event_loop()
 
 
     if args.type == 'baidu':
         crawler = Baidu()
-        loop.run_until_complete(crawler.run(args.dict))
+        loop.run_until_complete(crawler.run(args.dict, loop))
         # loop.run_until_complete(crawler.convert())
     elif args.type == 'hudong':
         crawler = Hudong()
-        loop.run_until_complete(crawler.run(args.dict))
+        loop.run_until_complete(crawler.run(args.dict, loop))
 
