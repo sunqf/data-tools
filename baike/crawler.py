@@ -283,11 +283,11 @@ class BaseCrawler:
 
             self.save_queue.task_done()
 
-    async def run(self, dict_path: str, loop, num_executor):
+    async def run(self, dict_path: str, loop, num_worker):
         self.client_session = ClientSession(headers=headers)
         await self.get_finished()
 
-        with concurrent.futures.ProcessPoolExecutor(num_executor=num_executor) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_worker) as executor:
             await asyncio.ensure_future(self.get_lost(loop, executor))
             source = asyncio.ensure_future(self.put_keywords(dict_path))
 
@@ -427,19 +427,18 @@ if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--dict', type=str, help='dict path')
     arg_parser.add_argument('--type', type=str, help='baike type')
-    arg_parser.add_argument('--num_executor', type=int, default=5, help='num executor')
+    arg_parser.add_argument('--num-worker', type=int, default=5, help='num executor')
 
     args = arg_parser.parse_args()
 
     # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     loop = asyncio.get_event_loop()
 
-
     if args.type == 'baidu':
         crawler = Baidu()
-        loop.run_until_complete(crawler.run(args.dict, loop, args.num_executor))
+        loop.run_until_complete(crawler.run(args.dict, loop, args.num_worker))
         # loop.run_until_complete(crawler.convert())
     elif args.type == 'hudong':
         crawler = Hudong()
-        loop.run_until_complete(crawler.run(args.dict, loop, args.num_executor))
+        loop.run_until_complete(crawler.run(args.dict, loop, args.num_worker))
 
