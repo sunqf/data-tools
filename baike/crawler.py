@@ -83,7 +83,7 @@ def compress(html: str):
     return zlib.compress(html.encode())
 
 
-def uncompress(data: bytes):
+def uncompress(data):
     return zlib.decompress(data).decode()
 
 
@@ -131,6 +131,19 @@ def extract_and_compress(data: list,
     return save_urls, save_htmls, new_urls
 
 
+def uncompress_and_extract(data: list):
+    new_urls = set()
+    for url, html in data:
+        try:
+            html = BeautifulSoup(uncompress(html), 'html.parser')
+            new_urls.update(extract_links(url, html))
+        except Exception as e:
+            print(url, e)
+            traceback.print_exc()
+
+    return new_urls
+
+
 class Queue:
     def __init__(self, priority=True):
         self.queue = asyncio.PriorityQueue() if priority else asyncio.Queue()
@@ -146,6 +159,9 @@ class Queue:
             return True
         else:
             return False
+
+    def qsize(self):
+        return self.queue.qsize()
 
     def task_done(self, task):
         self.queue.task_done()
@@ -164,8 +180,8 @@ class BaseCrawler:
         self.num_worker = num_workers
         self.decompose_selectors = decompose_selectors
         self.url_queue = Queue(priority=True)
-        self.html_queue = asyncio.Queue()
-        self.save_queue = asyncio.Queue()
+        self.html_queue = asyncio.Queue(maxsize=10000)
+        self.save_queue = asyncio.Queue(maxsize=10000)
         self.finished_urls = set()
 
         self.client_session = None
@@ -267,12 +283,14 @@ class BaseCrawler:
 
             self.save_queue.task_done()
 
-    async def run(self, dict_path: str, loop):
+    async def run(self, dict_path: str, loop, num_executor):
         self.client_session = ClientSession(headers=headers)
         await self.get_finished()
 
-        source = asyncio.ensure_future(self.put_keywords(dict_path))
-        with concurrent.futures.ProcessPoolExecutor(max_workers=5) as executor:
+        with concurrent.futures.ProcessPoolExecutor(num_executor=num_executor) as executor:
+            await asyncio.ensure_future(self.get_lost(loop, executor))
+            source = asyncio.ensure_future(self.put_keywords(dict_path))
+
             tasks = [asyncio.ensure_future(self.compress_worker(loop, executor)),
                      asyncio.ensure_future(self.save_worker()),
                      *[asyncio.ensure_future(self.crawl_worker()) for _ in range(self.num_worker)]]
@@ -298,6 +316,32 @@ class BaseCrawler:
             records = await reader.fetch('SELECT url from baike_html2 where type=\'{}\''.format(self.type))
             self.finished_urls.update([r['url'] for r in records])
 
+    async def get_lost(self, loop, executor):
+        reader = await self.db_connect()
+        futures = []
+
+        async with reader.transaction():
+            batch = []
+            async for record in reader.cursor('SELECT url, html from baike_html2 where type=\'{}\''.format(self.type)):
+                url = record['url']
+                html = record['html']
+                batch.append((url, html))
+                if len(batch) > 200:
+                    futures.append(loop.run_in_executor(executor, uncompress_and_extract, batch))
+                    batch = []
+
+                if len(futures) > 100:
+                    for future in asyncio.as_completed(futures):
+                        for new_url in await future:
+                            new_url = self.format_url(new_url)
+                            if new_url not in self.finished_urls:
+                                if self.is_item_url(new_url):
+                                    await self.url_queue.put((ITEM_ORDER, new_url))
+                                elif self.is_search_url(new_url):
+                                    await self.url_queue.put((SEARCH_ORDER, new_url))
+                    print(self.url_queue.qsize())
+                    futures = []
+
     @staticmethod
     def get_keywords(path: str):
         keywords = set()
@@ -320,7 +364,7 @@ class Baidu(BaseCrawler):
     def __init__(self):
         super(Baidu, self).__init__(type='baidu_baike',
                                     keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
-                                    search_prefix='https://baike.baidu.com/search',
+                                    search_prefix='https://baike.baidu.com',
                                     item_prefix='https://baike.baidu.com/item',
                                     num_workers=5, decompose_selectors=self.decompose_selectors)
 
@@ -383,6 +427,7 @@ if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--dict', type=str, help='dict path')
     arg_parser.add_argument('--type', type=str, help='baike type')
+    arg_parser.add_argument('--num_executor', type=int, default=5, help='num executor')
 
     args = arg_parser.parse_args()
 
@@ -392,9 +437,9 @@ if __name__ == '__main__':
 
     if args.type == 'baidu':
         crawler = Baidu()
-        loop.run_until_complete(crawler.run(args.dict, loop))
+        loop.run_until_complete(crawler.run(args.dict, loop, args.num_executor))
         # loop.run_until_complete(crawler.convert())
     elif args.type == 'hudong':
         crawler = Hudong()
-        loop.run_until_complete(crawler.run(args.dict, loop))
+        loop.run_until_complete(crawler.run(args.dict, loop, args.num_executor))
 

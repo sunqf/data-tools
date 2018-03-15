@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.6
 # -*- coding: utf-8 -*-
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, Tag, NavigableString
 import zlib
 from urllib import parse
 from corpus.util.config import headers
@@ -10,24 +10,111 @@ import asyncio
 import asyncpg
 import traceback
 import concurrent
-from typing import Union, Iterable, AsyncIterable, Generator, AsyncGenerator
-
+from typing import Union, List, Iterable, AsyncIterable, Generator, AsyncGenerator
+from pprint import pprint
 
 type = 'baidu_baike'
 host = 'https://baike.baidu.com'
 
 
-def build_tree(html):
+def build_tree(html: str) -> Tag:
     tree = BeautifulSoup(html, 'html.parser')
     for a in tree.select('a[href]'):
         a.attrs['href'] = parse.urljoin(host, a.attrs['href'])
     return tree
 
 
-def format_str(tag):
+def format_str(tag: Tag) -> str:
     tag.name = 'div'
     tag.attrs.clear()
+
+    for sup in tag.select('sup'):
+        sup.decompose()
+
+    for sup_ref in tag.select('a.sup-anchor'):
+        sup_ref.decompose()
+
     return str(tag)
+
+
+class PunctuationCounter:
+    punc_pairs = {'(': ')', '{': '}', '[': ']', '<': '>', '《': '》', '（': '）', '【': '】', '“': '”'}
+    left2id = {}
+    right2id = {}
+    for i, (k, v) in enumerate(punc_pairs.items()):
+        left2id[k] = i
+        right2id[v] = i
+
+    def __init__(self):
+        self.counter = [0] * len(self.punc_pairs)
+
+    def count(self, char):
+        if char in self.left2id:
+            self.counter[self.left2id[char]] += 1
+        elif char in self.right2id:
+            self.counter[self.right2id[char]] -= 1
+
+    def splittable(self) -> bool:
+        return sum(self.counter) == 0
+
+    def reset(self):
+        self.counter = [0] * len(self.punc_pairs)
+
+def split_infobox_value(tag: BeautifulSoup) -> List[str]:
+    if tag is None: return []
+
+    groups = []
+    curr = []
+    seps = ['，', '、', '\n', ';', '；']
+    single_seps = ['及', '等', '和', '或']
+
+    counter = PunctuationCounter()
+    for content in tag.contents:
+        if isinstance(content, NavigableString):
+            if content.strip() in single_seps:
+                if len(curr) > 0:
+                    groups.append(curr)
+                    curr = []
+            else:
+
+                start_id = 0
+                for id, char in enumerate(content):
+                    if char in seps and counter.splittable():
+                        if id - start_id > 0:
+                            curr.append(NavigableString(content[start_id:id]))
+                        start_id = id+1
+                        if len(curr) > 0:
+                            groups.append(curr)
+                            curr = []
+                    counter.count(char)
+
+                if counter.splittable() and start_id < len(content):
+                    end_id = len(content)
+                    if content.endswith('等等'):
+                        end_id -= 2
+                    elif content.endswith('等'):
+                        end_id -= 1
+
+                    if start_id < end_id:
+                        curr.append(NavigableString(content[start_id:end_id]))
+
+        elif isinstance(content, Tag):
+            if content.name == 'br' and len(curr) > 0:
+                groups.append(curr)
+                curr = []
+            else:
+                curr.append(content)
+
+    if len(curr) > 0:
+        groups.append(curr)
+
+    tags = []
+    for g in groups:
+        tag = Tag(name='div', parser='html.parser')
+        for sub in g:
+            tag.append(sub)
+        tags.append(format_str(tag))
+    return tags
 
 
 def check_type(data, checked):
@@ -42,8 +129,10 @@ def check_type(data, checked):
         for item in data:
             check_type(item, checked)
 
+
 def format_attr_name(word: str) -> str:
     return word.replace('\xa0', '').strip()
+
 
 def extract(html: str):
     html = build_tree(html)
@@ -88,13 +177,12 @@ def extract(html: str):
         if lemma_summary:
             attrs['lemma_summary'] = format_str(lemma_summary)
 
-    if 'infobox' not in attrs:
-        names = [format_attr_name(tag.text) for tag in html.select('dt.basicInfo-item')]
-        values = [format_str(tag) for tag in html.select('dd.basicInfo-item')]
-        infobox = {name: value for name, value in zip(names, values)}
-        if len(infobox) > 0:
-            attrs['infobox'] = infobox
+    names = [format_attr_name(dt.text) for dt in html.select('dt.basicInfo-item')]
+    values = [split_infobox_value(dl) for dl in html.select('dd.basicInfo-item')]
+    info_box = {name: value for name, value in zip(names, values)}
 
+    if len(info_box) > 0:
+        attrs['infobox'] = info_box
 
     # todo 是否锁定， 投票计数, 浏览次数
 
