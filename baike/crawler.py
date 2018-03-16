@@ -14,6 +14,7 @@ from typing import Set, List
 import concurrent
 from corpus.util.config import headers
 from urllib.parse import unquote
+from tqdm import tqdm
 
 ITEM_ORDER = 1
 SEARCH_ORDER = 2
@@ -198,31 +199,34 @@ class BaseCrawler:
     def format_url(self, url: str) -> str:
         return unquote(url.split('#')[0].split('?')[0] if self.is_item_url(url) else url)
 
-    async def put_keywords(self, dict_path):
+    async def fetch_html(self, url):
+        try:
+            response_url, html = await get_html(self.client_session, url)
+            response_url = self.format_url(response_url)
+            if html:
+                self.finished_urls.add(url)
+                if url == response_url:
+                    await self.html_queue.put((url, html))
+                else:
+                    await self.html_queue.put((url, None))
+                    if response_url not in self.finished_urls:
+                        self.finished_urls.add(response_url)
+                        await self.html_queue.put((response_url, html))
+        except Exception as e:
+            print(url, e)
+            traceback.print_exc()
+
+    async def search_worker(self, dict_path):
         for word in self.get_keywords(dict_path):
             url = self.format_keyword(word)
             if url not in self.finished_urls:
-                await self.url_queue.put((SEARCH_ORDER, url))
+                await self.fetch_html(url)
 
     async def crawl_worker(self):
         while True:
             order, url = await self.url_queue.get()
             if url not in self.finished_urls:
-                try:
-                    response_url, html = await get_html(self.client_session, url)
-                    response_url = self.format_url(response_url)
-                    if html:
-                        self.finished_urls.add(url)
-                        if url == response_url:
-                            await self.html_queue.put((url, html))
-                        else:
-                            await self.html_queue.put((url, None))
-                            if response_url not in self.finished_urls:
-                                self.finished_urls.add(response_url)
-                                await self.html_queue.put((response_url, html))
-                except Exception as e:
-                    print(url, e)
-                    traceback.print_exc()
+                await self.fetch_html(url)
             self.url_queue.task_done((order, url))
 
     @staticmethod
@@ -275,8 +279,6 @@ class BaseCrawler:
                         "INSERT INTO finished_url (url, type) VALUES ($1, $2) ON CONFLICT DO NOTHING",
                         [(url, self.type) for url in save_urls])
 
-
-
             except Exception as e:
                 print(e)
                 traceback.print_exc()
@@ -288,14 +290,15 @@ class BaseCrawler:
         await self.get_finished()
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=num_worker) as executor:
-            await asyncio.ensure_future(self.get_lost(loop, executor))
-            source = asyncio.ensure_future(self.put_keywords(dict_path))
+            lost_future = asyncio.ensure_future(self.get_lost(loop, executor))
+            search_future = asyncio.ensure_future(self.search_worker(dict_path))
 
             tasks = [asyncio.ensure_future(self.compress_worker(loop, executor)),
                      asyncio.ensure_future(self.save_worker()),
                      *[asyncio.ensure_future(self.crawl_worker()) for _ in range(self.num_worker)]]
 
-            await source
+            await search_future
+            await lost_future
             await self.url_queue.join()
             await self.html_queue.join()
             await self.save_queue.join()
@@ -331,7 +334,7 @@ class BaseCrawler:
                     batch = []
 
                 if len(futures) > 100:
-                    for future in asyncio.as_completed(futures):
+                    for future in tqdm(asyncio.as_completed(futures)):
                         for new_url in await future:
                             new_url = self.format_url(new_url)
                             if new_url not in self.finished_urls:
@@ -364,7 +367,7 @@ class Baidu(BaseCrawler):
     def __init__(self):
         super(Baidu, self).__init__(type='baidu_baike',
                                     keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
-                                    search_prefix='https://baike.baidu.com',
+                                    search_prefix='https://baike.baidu.com/search',
                                     item_prefix='https://baike.baidu.com/item',
                                     num_workers=5, decompose_selectors=self.decompose_selectors)
 
