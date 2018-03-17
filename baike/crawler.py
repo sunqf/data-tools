@@ -222,6 +222,38 @@ class BaseCrawler:
             if url not in self.finished_urls:
                 await self.fetch_html(url)
 
+    async def entity_worker(self, entity_path):
+        for entity in self.get_keywords(entity_path):
+            url = self.item_prefix + '/' + entity
+            if url not in self.finished_urls:
+                await self.url_queue.put((ITEM_ORDER, url))
+
+    async def get_lost(self, loop, executor):
+        reader = await self.db_connect()
+        futures = []
+
+        async with reader.transaction():
+            batch = []
+            async for record in reader.cursor('SELECT url, html from baike_html2 where type=\'{}\''.format(self.type)):
+                url = record['url']
+                html = record['html']
+                batch.append((url, html))
+                if len(batch) > 200:
+                    futures.append(loop.run_in_executor(executor, uncompress_and_extract, batch))
+                    batch = []
+
+                if len(futures) > 100:
+                    for future in tqdm(asyncio.as_completed(futures)):
+                        for new_url in await future:
+                            new_url = self.format_url(new_url)
+                            if new_url not in self.finished_urls:
+                                if self.is_item_url(new_url):
+                                    await self.url_queue.put((ITEM_ORDER, new_url))
+                                elif self.is_search_url(new_url):
+                                    await self.url_queue.put((SEARCH_ORDER, new_url))
+                    print(self.url_queue.qsize())
+                    futures = []
+
     async def crawl_worker(self):
         while True:
             order, url = await self.url_queue.get()
@@ -285,20 +317,25 @@ class BaseCrawler:
 
             self.save_queue.task_done()
 
-    async def run(self, dict_path: str, loop, num_worker):
+    async def run(self, words_path: str, entity_path: str, recovery: bool, loop, num_worker):
         self.client_session = ClientSession(headers=headers)
         await self.get_finished()
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=num_worker) as executor:
-            lost_future = asyncio.ensure_future(self.get_lost(loop, executor))
-            search_future = asyncio.ensure_future(self.search_worker(dict_path))
+            entity_future = asyncio.ensure_future(self.entity_worker(entity_path)) if entity_path else None
+            search_future = asyncio.ensure_future(self.search_worker(words_path)) if words_path else None
 
             tasks = [asyncio.ensure_future(self.compress_worker(loop, executor)),
                      asyncio.ensure_future(self.save_worker()),
                      *[asyncio.ensure_future(self.crawl_worker()) for _ in range(self.num_worker)]]
 
-            await search_future
-            await lost_future
+            lost_future = asyncio.ensure_future(self.get_lost(loop, executor)) if recovery else None
+            if search_future:
+                await search_future
+            if entity_future:
+                await entity_future
+            if recovery:
+                await lost_future
             await self.url_queue.join()
             await self.html_queue.join()
             await self.save_queue.join()
@@ -319,44 +356,15 @@ class BaseCrawler:
             records = await reader.fetch('SELECT url from baike_html2 where type=\'{}\''.format(self.type))
             self.finished_urls.update([r['url'] for r in records])
 
-    async def get_lost(self, loop, executor):
-        reader = await self.db_connect()
-        futures = []
-
-        async with reader.transaction():
-            batch = []
-            async for record in reader.cursor('SELECT url, html from baike_html2 where type=\'{}\''.format(self.type)):
-                url = record['url']
-                html = record['html']
-                batch.append((url, html))
-                if len(batch) > 200:
-                    futures.append(loop.run_in_executor(executor, uncompress_and_extract, batch))
-                    batch = []
-
-                if len(futures) > 100:
-                    for future in tqdm(asyncio.as_completed(futures)):
-                        for new_url in await future:
-                            new_url = self.format_url(new_url)
-                            if new_url not in self.finished_urls:
-                                if self.is_item_url(new_url):
-                                    await self.url_queue.put((ITEM_ORDER, new_url))
-                                elif self.is_search_url(new_url):
-                                    await self.url_queue.put((SEARCH_ORDER, new_url))
-                    print(self.url_queue.qsize())
-                    futures = []
-
     @staticmethod
     def get_keywords(path: str):
-        keywords = set()
         with open(path) as file:
             for line in file:
                 fields = line.split('\t')
                 if len(fields) > 0:
                     word = fields[0].strip()
                     if len(word) > 0:
-                        keywords.add(word)
-
-        return keywords
+                        yield word
 
 
 class Baidu(BaseCrawler):
@@ -428,7 +436,9 @@ class Sogou(BaseCrawler):
 if __name__ == '__main__':
     import argparse
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument('--dict', type=str, help='dict path')
+    arg_parser.add_argument('--words', type=str, default=None, help='word dict')
+    arg_parser.add_argument('--entities', type=str, default=None, help='entity dict')
+    arg_parser.add_argument('--recovery', type=bool, default=False, help='recovery from html')
     arg_parser.add_argument('--type', type=str, help='baike type')
     arg_parser.add_argument('--num-worker', type=int, default=5, help='num executor')
 
@@ -439,9 +449,9 @@ if __name__ == '__main__':
 
     if args.type == 'baidu':
         crawler = Baidu()
-        loop.run_until_complete(crawler.run(args.dict, loop, args.num_worker))
+        loop.run_until_complete(crawler.run(args.words, args.entities, args.recovery, loop, args.num_worker))
         # loop.run_until_complete(crawler.convert())
     elif args.type == 'hudong':
         crawler = Hudong()
-        loop.run_until_complete(crawler.run(args.dict, loop, args.num_worker))
+        loop.run_until_complete(crawler.run(args.words, args.entities, args.recovery, loop, args.num_worker))
 
