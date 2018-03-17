@@ -212,7 +212,7 @@ async def fetch_worker(batch_size):
     reader = await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf', command_timeout=60)
     batch = []
     async with reader.transaction():
-        async for record in reader.cursor('SELECT url, html from baike_html2 where type=\'{}\''.format(type)):
+        async for record in reader.cursor('SELECT url, html from baike_html where type=\'{}\''.format(type)):
             url = record['url']
             html = zlib.decompress(record['html'])
             batch.append((url, record['html']))
