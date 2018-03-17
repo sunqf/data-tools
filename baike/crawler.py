@@ -173,12 +173,11 @@ class Queue:
 
 
 class BaseCrawler:
-    def __init__(self, type, keyword_format, search_prefix, item_prefix, num_workers, decompose_selectors):
+    def __init__(self, type, keyword_format, search_prefix, item_prefix, decompose_selectors):
         self.type = type
         self.keyword_format = keyword_format
         self.search_prefix = search_prefix
         self.item_prefix = item_prefix
-        self.num_worker = num_workers
         self.decompose_selectors = decompose_selectors
         self.url_queue = Queue(priority=True)
         self.html_queue = asyncio.Queue(maxsize=10000)
@@ -327,7 +326,7 @@ class BaseCrawler:
 
             tasks = [asyncio.ensure_future(self.compress_worker(loop, executor)),
                      asyncio.ensure_future(self.save_worker()),
-                     *[asyncio.ensure_future(self.crawl_worker()) for _ in range(self.num_worker)]]
+                     *[asyncio.ensure_future(self.crawl_worker()) for _ in range(num_worker)]]
 
             lost_future = asyncio.ensure_future(self.get_lost(loop, executor)) if recovery else None
             if search_future:
@@ -377,7 +376,7 @@ class Baidu(BaseCrawler):
                                     keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
                                     search_prefix='https://baike.baidu.com/search',
                                     item_prefix='https://baike.baidu.com/item',
-                                    num_workers=5, decompose_selectors=self.decompose_selectors)
+                                    decompose_selectors=self.decompose_selectors)
 
 
 class Hudong(BaseCrawler):
@@ -390,7 +389,6 @@ class Hudong(BaseCrawler):
                                      keyword_format='http://so.baike.com/doc/{}&prd=button_doc_search',
                                      search_prefix='http://so.baike.com',
                                      item_prefix='http://www.baike.com/wiki',
-                                     num_workers=5,
                                      decompose_selectors=self.decompose_selectors)
 
 
