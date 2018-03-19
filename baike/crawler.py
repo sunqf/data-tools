@@ -36,7 +36,10 @@ def statistics(func):
 
         def speed(self) -> float:
             elapsed_time = time.time() - self.start_time
-            return self.count/elapsed_time
+            tmp = self.count/elapsed_time
+            self.count = 0
+            self.start_time = time.time()
+            return tmp
 
     info = Info()
 
@@ -99,14 +102,13 @@ def extract_links(url, html: Tag) -> Set[str]:
     if html is not None:
         parse_result = urlparse(url)
         host = '{}://{}'.format(parse_result.scheme, parse_result.netloc)
-        return set(urljoin(host, a.attrs['href']) for a in html.select('a[href]'))
+        return set(urljoin(host, a.attrs['href']) for a in html.select('a[href]') if a.attrs['href'].startswith('#') is False)
     else:
         return set()
 
 
 def extract_and_compress(data: list,
-                         item_prefix: str,
-                         search_prefix: str,
+                         item_prefixes: List[str],
                          decompose_selectors: List[str]):
     save_urls = []
     save_htmls = []
@@ -116,15 +118,13 @@ def extract_and_compress(data: list,
         if html:
             try:
                 tree = BeautifulSoup(html, 'html.parser')
-                for new_url in extract_links(url, tree):
-                    if new_url.startswith(item_prefix):
-                        new_urls.add((ITEM_ORDER, new_url))
-                    elif new_url.startswith(search_prefix):
-                        new_urls.add((SEARCH_ORDER, new_url))
+                new_urls.update(extract_links(url, tree))
 
-                if url.startswith(item_prefix):
-                    tree = decompose(tree, decompose_selectors)
-                    save_htmls.append((url, compress(str(tree))))
+                for item_prefix in item_prefixes:
+                    if url.startswith(item_prefix):
+                        tree = decompose(tree, decompose_selectors)
+                        save_htmls.append((url, compress(str(tree))))
+                        break
             except Exception as e:
                 print(url, e)
                 traceback.print_exc()
@@ -173,11 +173,11 @@ class Queue:
 
 
 class BaseCrawler:
-    def __init__(self, type, keyword_format, search_prefix, item_prefix, decompose_selectors):
+    def __init__(self, type, keyword_format, search_prefix, item_prefixes, decompose_selectors):
         self.type = type
         self.keyword_format = keyword_format
         self.search_prefix = search_prefix
-        self.item_prefix = item_prefix
+        self.item_prefixes = item_prefixes
         self.decompose_selectors = decompose_selectors
         self.url_queue = Queue(priority=True)
         self.html_queue = asyncio.Queue(maxsize=10000)
@@ -190,7 +190,10 @@ class BaseCrawler:
         return self.keyword_format.format(word)
 
     def is_item_url(self, url: str) -> bool:
-        return url.startswith(self.item_prefix)
+        for prefix in self.item_prefixes:
+            if url.startswith(prefix):
+                return True
+        return False
 
     def is_search_url(self, url: str) -> bool:
         return url.startswith(self.search_prefix)
@@ -215,6 +218,15 @@ class BaseCrawler:
             print(url, e)
             traceback.print_exc()
 
+    async def add_urls(self, urls: list):
+        for new_url in urls:
+            new_url = self.format_url(new_url)
+            if new_url not in self.finished_urls:
+                if self.is_search_url(new_url):
+                    await self.url_queue.put((SEARCH_ORDER, new_url))
+                elif self.is_item_url(new_url):
+                    await self.url_queue.put((ITEM_ORDER, new_url))
+
     async def search_worker(self, dict_path):
         for word in self.get_keywords(dict_path):
             url = self.format_keyword(word)
@@ -223,7 +235,7 @@ class BaseCrawler:
 
     async def entity_worker(self, entity_path):
         for entity in self.get_keywords(entity_path):
-            url = self.item_prefix + '/' + entity
+            url = self.item_prefixes + '/' + entity
             if url not in self.finished_urls:
                 await self.url_queue.put((ITEM_ORDER, url))
 
@@ -243,13 +255,7 @@ class BaseCrawler:
 
                 if len(futures) > 100:
                     for future in tqdm(asyncio.as_completed(futures)):
-                        for new_url in await future:
-                            new_url = self.format_url(new_url)
-                            if new_url not in self.finished_urls:
-                                if self.is_item_url(new_url):
-                                    await self.url_queue.put((ITEM_ORDER, new_url))
-                                elif self.is_search_url(new_url):
-                                    await self.url_queue.put((SEARCH_ORDER, new_url))
+                        await self.add_urls(await future)
                     print(self.url_queue.qsize())
                     futures = []
 
@@ -282,7 +288,7 @@ class BaseCrawler:
                 batch = await self.get_batches(self.html_queue, 20)
                 future = loop.run_in_executor(executor,
                                               extract_and_compress,
-                                              batch, self.item_prefix, self.search_prefix, self.decompose_selectors)
+                                              batch, self.item_prefixes, self.decompose_selectors)
                 await self.save_queue.put(future)
             except Exception as e:
                 print(e)
@@ -294,15 +300,12 @@ class BaseCrawler:
             try:
                 future = await self.save_queue.get()
                 save_urls, save_htmls, new_urls = await future
-                for order, url in new_urls:
-                    url = self.format_url(url)
-                    if url not in self.finished_urls:
-                        await self.url_queue.put((order, url))
+                await self.add_urls(new_urls)
 
                 if len(save_htmls) > 0:
                     async with writer.transaction():
                         await writer.executemany(
-                            "INSERT INTO baike_html2 (html, url, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                            "INSERT INTO baike_html (html, url, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
                             [(html, url, self.type) for url, html in save_htmls])
 
                 async with writer.transaction():
@@ -321,6 +324,8 @@ class BaseCrawler:
         await self.get_finished()
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=num_worker) as executor:
+            if recovery:
+                await asyncio.ensure_future(self.get_lost(loop, executor))
             entity_future = asyncio.ensure_future(self.entity_worker(entity_path)) if entity_path else None
             search_future = asyncio.ensure_future(self.search_worker(words_path)) if words_path else None
 
@@ -328,13 +333,11 @@ class BaseCrawler:
                      asyncio.ensure_future(self.save_worker()),
                      *[asyncio.ensure_future(self.crawl_worker()) for _ in range(num_worker)]]
 
-            lost_future = asyncio.ensure_future(self.get_lost(loop, executor)) if recovery else None
             if search_future:
                 await search_future
             if entity_future:
                 await entity_future
-            if recovery:
-                await lost_future
+
             await self.url_queue.join()
             await self.html_queue.join()
             await self.save_queue.join()
@@ -352,7 +355,7 @@ class BaseCrawler:
             self.finished_urls.update([r['url'] for r in records])
 
         async with reader.transaction():
-            records = await reader.fetch('SELECT url from baike_html2 where type=\'{}\''.format(self.type))
+            records = await reader.fetch('SELECT url from baike_html where type=\'{}\''.format(self.type))
             self.finished_urls.update([r['url'] for r in records])
 
     @staticmethod
@@ -375,7 +378,7 @@ class Baidu(BaseCrawler):
         super(Baidu, self).__init__(type='baidu_baike',
                                     keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
                                     search_prefix='https://baike.baidu.com/search',
-                                    item_prefix='https://baike.baidu.com/item',
+                                    item_prefixes=['https://baike.baidu.com/item', 'http://baike.baidu.com/subview'],
                                     decompose_selectors=self.decompose_selectors)
 
 
@@ -388,7 +391,7 @@ class Hudong(BaseCrawler):
         super(Hudong, self).__init__(type='hudong_baike',
                                      keyword_format='http://so.baike.com/doc/{}&prd=button_doc_search',
                                      search_prefix='http://so.baike.com',
-                                     item_prefix='http://www.baike.com/wiki',
+                                     item_prefixes=['http://www.baike.com/wiki'],
                                      decompose_selectors=self.decompose_selectors)
 
 
