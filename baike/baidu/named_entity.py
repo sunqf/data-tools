@@ -72,9 +72,9 @@ select key, count(*) as count
 class Person(Entity):
     name = 'PERSON'
     address = {'出生地', '国籍', '籍贯', '祖籍', '现居地', '现居'}
-    date = {'生日', '出生时间', '逝世日期', '去世时间', '入党时间'}
+    date = {'生日', '出生时间', '出生日期' '逝世日期', '去世时间', '入党时间'}
     alias = {'别号', '别名', '别称', '本名', '字号', '谥号', '原名'}
-    misc = {'年龄', '毕业院校', '身高', '体重', '星座', '民族族群', '性别'}
+    misc = {'年龄', '毕业院校', '身高', '体重', '星座', '民族族群', '性别', '主要成就'}
 
     def named(self, knowledge: dict) -> object:
         infobox = self.infobox(knowledge)
@@ -149,7 +149,7 @@ class ChemicalSubstance(Entity):
     name = 'CHEMICAL_SUBSTANCE'
     formula = {'分子式', '化学式', '结构式'}
     NO = {'CAS', 'CAS号', 'CAS登录号', 'CAS No', 'CAS NO', 'CAS NO.'
-          'EINECS号', 'EINECS', 'EINECS登录号',
+                                                       'EINECS号', 'EINECS', 'EINECS登录号',
           'PubChem号'}
 
     def named(self, knowledge: dict) -> str:
@@ -163,6 +163,7 @@ class ChemicalSubstance(Entity):
 
 class Disease(Entity):
     name = 'DISEASE'
+
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
         if open_tags and '科学百科疾病症状分类' in open_tags:
@@ -172,15 +173,153 @@ class Disease(Entity):
 
 class Species(Entity):
     name = 'SPECIES'
+    infos = {'界', '门', '亚门', '纲', '亚纲', '目', '亚目', '科', '亚科', '属', '亚属', '种', '亚种'}
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
         if open_tags and '科学百科生命科学分类' in open_tags:
+            return self.name
+        infobox = self.infobox(knowledge)
+        if infobox and len(self.infos.intersection(infobox)) >= 2:
+            return self.name
+
+        return None
+
+
+# 作品，包括 书，影视作品，歌曲
+class Works(Entity):
+    name = 'WORK'
+    book = {'出版时间', 'ISBN', '页数', '书名', '出版社', '作者'}
+    music = {'所属专辑', '歌曲原唱', '填词', '歌曲语言', '演唱者', '创作年代', '作者'}
+    movie = {'拍摄地点', '拍摄日期', '导演', '主演', '上映时间', '片长'}
+    tv = {'导演', '出品时间', '制片地区', '拍摄地点', '首播时间', '导演', '编剧', '主演', '集数', '制片人', '上映时间'}
+
+    def named(self, knowledge: dict) -> str:
+        infobox = self.infobox(knowledge)
+        if infobox:
+            if len(self.book.intersection(infobox)) > 0 or \
+                    len(self.music.intersection(infobox)) > 0 or \
+                    len(self.movie.intersection(infobox)) > 0 or \
+                    len(self.tv.intersection(infobox)) > 0:
+                return self.name
+        return None
+
+'''
+select key, count(*) as count
+  from (
+    select json_object_keys(knowledge->'attrs'->'infobox') as key
+    from baike_knowledge2
+    where (knowledge->'attrs'->'open_tags')::jsonb ?| array['奖项']
+        and (knowledge->'attrs'->'infobox')::jsonb ?| array['创立时间', '颁发机构', '颁奖地点', '举办者', '历届得主', '获奖人', '提名单位', '颁发时间', '奖励范围', '开始评奖', '表扬对象']) as keys
+  group by key
+  order by count
+'''
+
+
+class Award(Entity):
+    name = 'AWARD'
+    tags = set(['奖项'])
+    attrs = set(['创立时间', '颁发机构', '颁奖地点', '举办者', '历届得主',
+                 '获奖人', '提名单位', '颁发时间', '奖励范围', '开始评奖', '表扬对象'])
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.open_tags(knowledge)
+        if open_tags and infobox:
+            if len(self.tags.intersection(open_tags)) > 0 and len(self.attrs.intersection(open_tags)):
+                return self.name
+        return None
+
+'''
+select key, count(*) as count
+  from (
+    select json_object_keys(knowledge->'attrs'->'infobox') as key
+    from baike_knowledge2
+    where (knowledge->'attrs'->'infobox')::jsonb ?| array['语系']
+      and (knowledge->'attrs'->'open_tags')::jsonb ?| array['语言']) as keys
+  group by key
+  order by count
+'''
+class Language(Entity):
+    name = 'LANGUAGE'
+
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if '语系' in infobox and '语言' in open_tags:
+                return self.name
+        return None
+
+# 事件
+class Event(Entity):
+    name = 'EVENT'
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if '时间' in infobox and '历史事件' in open_tags:
+                return self.name
+        return None
+
+# 专业， 学科
+''' 
+    select *
+    from baike_knowledge2
+    where (knowledge->'attrs'->'infobox')::jsonb ?| array['学科代码', '授予学位']
+'''
+
+
+class Subject(Entity):
+    name = 'SUBJECT'
+    attrs = set(['学科代码', '授予学位'])
+
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if len(self.attrs.intersection(infobox)) > 0:
+                return self.name
+        return None
+
+'''
+select *
+    from baike_knowledge2
+    where (knowledge->'attrs'->'infobox')::jsonb ?| array['政治体制', '国歌', '国家领袖']
+'''
+class Country(Entity):
+    name = 'COUNTRY'
+    attrs = set(['政治体制', '国歌', '国家领袖'])
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if len(self.attrs.intersection(infobox)) > 0:
+                return self.name
+        return None
+
+'''
+class Food(Entity):
+    name = 'FOOD'
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+'''
+
+
+class CommonWord(Entity):
+    name = 'O'
+
+    def named(self, knowledge: dict) -> str:
+        open_tags = self.open_tags(knowledge)
+        if open_tags and ('成语' in open_tags or
+                          (len(open_tags) == 2 and '字词' in open_tags and '语言' in open_tags)):
             return self.name
         return None
 
 
 entities = [Location(), Person(), Organization(),
-            ChemicalSubstance(), Disease(), Species()]
+            ChemicalSubstance(), Disease(), Species(),
+            Works(), Award(), Language(), Country(), Subject(), CommonWord()]
 
 
 async def extract_entity():
@@ -199,15 +338,19 @@ async def extract_entity():
                 url2entity[url] = names[0]
     return url2entity
 
+
 def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
     def _label(node: PageElement):
         if isinstance(node, NavigableString):
             text = node.strip()
             parent = node.parent
-            if parent.name == 'a' and 'href' in parent.attrs and parent.attrs['href'] in url2type:
-                type = url2type[parent.attrs['href']]
-                url2count[parent.attrs['href']] += 1
-                yield '[[[{}|||{}|||{}]]]'.format(text, type, parent.attrs['href'])
+            if parent.name == 'a' and 'href' in parent.attrs:
+                if parent.attrs['href'] in url2type:
+                    type = url2type[parent.attrs['href']]
+                    url2count[parent.attrs['href']] += 1
+                    yield '[[[{}|||{}|||{}]]]'.format(text, type, parent.attrs['href'])
+                else:
+                    yield '[[[{}|||{}|||{}]]]'.format(text, '*', parent.attrs['href'])
             else:
                 yield text
         elif isinstance(node, Tag):
@@ -221,8 +364,8 @@ def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
         found = False
         for a in para.select('a[href]'):
             new_url = unquote(urljoin(url, a.attrs['href']))
+            a.attrs['href'] = new_url
             if new_url in url2type:
-                a.attrs['href'] = new_url
                 found = True
 
         if found and len(para.text) > 20:
@@ -245,14 +388,17 @@ async def extract_label(url2entity: Mapping, output: TextIO, loop):
     return url2count
 
 
-import asyncio
-loop = asyncio.get_event_loop()
-url2entity = loop.run_until_complete(extract_entity())
+if __name__ == '__main__':
+    import asyncio
+    import sys
 
-print('labeling links in html.')
-with open('entity.data', 'w') as data:
-    url2count = loop.run_until_complete(extract_label(url2entity, data, loop))
+    loop = asyncio.get_event_loop()
+    url2entity = loop.run_until_complete(extract_entity())
 
-with open('entity.count', 'w') as data:
-    for url, count in url2count.most_common():
-        data.write('{}\t{}\t{}'.format(url, url2entity[url], count))
+    print('labeling links in html.')
+    with open(sys.argv[1], 'w') as data:
+        url2count = loop.run_until_complete(extract_label(url2entity, data, loop))
+
+    with open('entity.count', 'w') as data:
+        for url, count in url2count.most_common():
+            data.write('{}\t{}\t{}'.format(url, url2entity[url], count))

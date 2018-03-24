@@ -12,6 +12,7 @@ import traceback
 import concurrent
 from typing import Union, List, Iterable, AsyncIterable, Generator, AsyncGenerator
 from pprint import pprint
+from .. import utils
 
 type = 'baidu_baike'
 host = 'https://baike.baidu.com'
@@ -28,11 +29,7 @@ def format_str(tag: Tag) -> str:
     tag.name = 'div'
     tag.attrs.clear()
 
-    for sup in tag.select('sup'):
-        sup.decompose()
-
-    for sup_ref in tag.select('a.sup-anchor'):
-        sup_ref.decompose()
+    tag = utils.clean_tag(tag)
 
     return str(tag)
 
