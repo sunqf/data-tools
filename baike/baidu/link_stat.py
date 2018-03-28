@@ -3,9 +3,10 @@
 
 from .. import utils
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, unquote
 from collections import Counter
-from pprint import pprint
+import sys
+
 async def stat():
     counter = Counter()
     db = await utils.connect()
@@ -15,7 +16,8 @@ async def stat():
             html = utils.decompress(record['html'])
             tree = BeautifulSoup(html, 'html.parser')
             tree = utils.clean_tag(tree)
-            counter.update(urljoin(url, href.attrs['href']) for href in tree.select('a[href]'))
+            counter.update(unquote(urljoin(url, href.attrs['href']))
+                           for href in tree.select('a[href]') if not href.attrs['href'].startswith('#'))
 
     return counter
 
@@ -24,4 +26,7 @@ import asyncio
 
 loop = asyncio.get_event_loop()
 counter = loop.run_until_complete(stat())
-pprint(counter.most_common())
+
+with open(sys.argv[1], 'w') as file:
+    for k, v in counter.most_common():
+        file.write('{}\t{}\n'.format(k, v))

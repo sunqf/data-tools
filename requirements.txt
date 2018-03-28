@@ -1,0 +1,14 @@
+asyncpg==0.14.0
+tqdm==4.19.5
+uvloop==0.9.1
+gevent==1.2.2
+requests==2.18.4
+aiohttp==2.3.7
+jieba==0.39
+simplejson==3.13.2
+spacy==2.0.5
+pycld2==0.31
+psycopg2==2.7.3.2
+selenium==3.8.1
+beautifulsoup4==4.6.0
+typing==3.6.4

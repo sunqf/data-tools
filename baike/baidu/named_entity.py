@@ -79,10 +79,8 @@ class Person(Entity):
     def named(self, knowledge: dict) -> object:
         infobox = self.infobox(knowledge)
         if infobox:
-            if len(self.address.intersection(infobox)) > 0 and \
-                    len(self.date.intersection(infobox)) > 0 and \
-                    (len(self.alias.intersection(infobox)) > 0 or
-                     len(self.misc.intersection(infobox)) > 0):
+            if (len(self.address.intersection(infobox)) > 0 or len(self.date.intersection(infobox)) > 0) and \
+                (len(self.alias.intersection(infobox)) > 0 or len(self.misc.intersection(infobox)) > 0):
                 return self.name
         return None
 
@@ -296,6 +294,19 @@ class Country(Entity):
                 return self.name
         return None
 
+class Constellation(Entity):
+    name = 'CONSTELLATION'
+    tags = set(['科学百科天文学分类', '天体'])
+    attrs = set(['绕转周期', '星座', '距离', '发现时间', '发现者', '直径', '距地距离', '公转周期'])
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if len(self.tags.intersection(open_tags)) > 0 and len(self.attrs.intersection(infobox)) > 0:
+                return self.name
+        return None
+
+
 '''
 class Food(Entity):
     name = 'FOOD'
@@ -305,21 +316,49 @@ class Food(Entity):
         if open_tags and infobox:
 '''
 
+# 交通线路
+class TrafficLine(Entity):
+    name = 'TRAFFIC_LINE'
+    attrs = set(['国家编号', '编号', '起点', '终点', '全程'])
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if '交通线路' in open_tags and len(self.attrs.intersection(infobox)) > 0:
+                return self.name
+
+        return None
+
+# 车站
+class Station(Entity):
+    name = 'STATTION'
+    attrs = set(['车站等级', '车站位置', '车站地址', '隶属铁路局', '途经路线', '规划线路', '车站编号', '车站性质'])
+
+    def named(self, knowledge: dict):
+        open_tags = self.open_tags(knowledge)
+        infobox = self.infobox(knowledge)
+        if open_tags and infobox:
+            if '路线' in open_tags and len(self.attrs.intersection(infobox)) > 0:
+                return self.name
+
+        return None
+
 
 class CommonWord(Entity):
     name = 'O'
 
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
-        if open_tags and ('成语' in open_tags or
-                          (len(open_tags) == 2 and '字词' in open_tags and '语言' in open_tags)):
+        if open_tags and (len(open_tags) == 1 and ('成语' in open_tags or '字词' in open_tags) or
+                          (len(open_tags) >= 2 and '字词' in open_tags and '语言' in open_tags)):
             return self.name
         return None
 
 
 entities = [Location(), Person(), Organization(),
             ChemicalSubstance(), Disease(), Species(),
-            Works(), Award(), Language(), Country(), Subject(), CommonWord()]
+            Works(), Award(), Language(), Country(), Subject(),
+            Constellation(), Station(), TrafficLine(), CommonWord()]
 
 
 async def extract_entity():
