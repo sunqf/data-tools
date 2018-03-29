@@ -11,3 +11,4 @@ class GlobalTime(HttpCrawler):
 
 
     async def get_urls(self):
+        pass

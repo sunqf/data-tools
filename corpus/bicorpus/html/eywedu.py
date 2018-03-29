@@ -16,4 +16,6 @@ class Eywedu(HttpCrawler):
         index_html = await self.get_html(index)
         if index_html:
             index_html = BeautifulSoup(index_html, 'html.parser')
-            for tag in index_html.select('body > div:nth-child(3) > table:nth-child(2) > tbody > tr > td > table > tbody > tr:nth-child(2) > td > b > div > center > table > tbody > tr:nth-child(2) > td:nth-child(1) > div > big > font > a')
+            for tag in index_html.select('body > div:nth-child(3) > table:nth-child(2) > tbody > tr > td > table > tbody > tr:nth-child(2) ' \
+                                         '> td > b > div > center > table > tbody > tr:nth-child(2) > td:nth-child(1) > div > big > font > a'):
+                pass
