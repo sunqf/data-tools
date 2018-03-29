@@ -4,7 +4,7 @@ import asyncio
 import functools
 import time
 import traceback
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, unquote
 import zlib
 import asyncpg
 import uvloop
@@ -13,7 +13,6 @@ from bs4 import BeautifulSoup, UnicodeDammit, Tag
 from typing import Set, List
 import concurrent
 from corpus.util.config import headers
-from urllib.parse import unquote
 from tqdm import tqdm
 
 ITEM_ORDER = 1
@@ -199,7 +198,10 @@ class BaseCrawler:
         return url.startswith(self.search_prefix)
 
     def format_url(self, url: str) -> str:
-        return unquote(url.split('#')[0].split('?')[0] if self.is_item_url(url) else url)
+        if self.is_item_url(url):
+            result = urlparse(url)
+            url = unquote('{}://{}{}'.format(result.scheme, result.netloc, result.path))
+        return url
 
     async def fetch_html(self, url):
         try:
@@ -235,7 +237,7 @@ class BaseCrawler:
 
     async def entity_worker(self, entity_path):
         for entity in self.get_keywords(entity_path):
-            url = self.item_prefixes + '/' + entity
+            url = self.item_prefixes[0] + '/' + entity
             if url not in self.finished_urls:
                 await self.url_queue.put((ITEM_ORDER, url))
 
@@ -378,7 +380,8 @@ class Baidu(BaseCrawler):
         super(Baidu, self).__init__(type='baidu_baike',
                                     keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
                                     search_prefix='https://baike.baidu.com/search',
-                                    item_prefixes=['https://baike.baidu.com/item', 'http://baike.baidu.com/subview'],
+                                    item_prefixes=['https://baike.baidu.com/item', 'http://baike.baidu.com/subview',
+                                                   'http://baike.baidu.com/view'],
                                     decompose_selectors=self.decompose_selectors)
 
 

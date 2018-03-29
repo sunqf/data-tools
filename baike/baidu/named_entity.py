@@ -173,9 +173,6 @@ class Species(Entity):
     name = 'SPECIES'
     infos = {'界', '门', '亚门', '纲', '亚纲', '目', '亚目', '科', '亚科', '属', '亚属', '种', '亚种'}
     def named(self, knowledge: dict) -> str:
-        open_tags = self.open_tags(knowledge)
-        if open_tags and '科学百科生命科学分类' in open_tags:
-            return self.name
         infobox = self.infobox(knowledge)
         if infobox and len(self.infos.intersection(infobox)) >= 2:
             return self.name
