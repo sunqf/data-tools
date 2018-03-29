@@ -70,6 +70,12 @@ def clean_tag(tag: Tag):
     for img in tag.select('div.lemma-album'):
         img.decompose()
 
+    for img in tag.select('a.lemma-album'):
+        img.decompose()
+
+    for img in tag.select('a.lemma-picture'):
+        img.decompose()
+
     for sup in tag.select('sup'):
         sup.decompose()
 
