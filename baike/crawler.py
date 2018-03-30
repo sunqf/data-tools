@@ -172,10 +172,10 @@ class Queue:
 
 
 class BaseCrawler:
-    def __init__(self, type, keyword_format, search_prefix, item_prefixes, decompose_selectors):
+    def __init__(self, type, keyword_format, search_prefixes, item_prefixes, decompose_selectors):
         self.type = type
         self.keyword_format = keyword_format
-        self.search_prefix = search_prefix
+        self.search_prefixes = search_prefixes
         self.item_prefixes = item_prefixes
         self.decompose_selectors = decompose_selectors
         self.url_queue = Queue(priority=True)
@@ -195,7 +195,10 @@ class BaseCrawler:
         return False
 
     def is_search_url(self, url: str) -> bool:
-        return url.startswith(self.search_prefix)
+        for prefix in self.search_prefixes:
+            if url.startswith(prefix):
+                return True
+        return False
 
     def format_url(self, url: str) -> str:
         if self.is_item_url(url):
@@ -247,7 +250,7 @@ class BaseCrawler:
 
         async with reader.transaction():
             batch = []
-            async for record in reader.cursor('SELECT url, html from baike_html2 where type=\'{}\''.format(self.type)):
+            async for record in reader.cursor('SELECT url, html from baike_html where type=\'{}\''.format(self.type)):
                 url = record['url']
                 html = record['html']
                 batch.append((url, html))
@@ -260,6 +263,15 @@ class BaseCrawler:
                         await self.add_urls(await future)
                     print(self.url_queue.qsize())
                     futures = []
+
+            if len(batch) > 0:
+                futures.append(loop.run_in_executor(executor, uncompress_and_extract, batch))
+                batch = []
+            print(self.url_queue.qsize())
+            if len(futures) > 0:
+                for future in tqdm(asyncio.as_completed(futures)):
+                    await self.add_urls(await future)
+                print(self.url_queue.qsize())
 
     async def crawl_worker(self):
         while True:
@@ -379,7 +391,7 @@ class Baidu(BaseCrawler):
     def __init__(self):
         super(Baidu, self).__init__(type='baidu_baike',
                                     keyword_format='https://baike.baidu.com/search?word={}&pn=0&rn=0&enc=utf8',
-                                    search_prefix='https://baike.baidu.com/search',
+                                    search_prefixes=['https://baike.baidu.com/search'],
                                     item_prefixes=['https://baike.baidu.com/item', 'http://baike.baidu.com/subview',
                                                    'http://baike.baidu.com/view'],
                                     decompose_selectors=self.decompose_selectors)
@@ -393,8 +405,8 @@ class Hudong(BaseCrawler):
     def __init__(self):
         super(Hudong, self).__init__(type='hudong_baike',
                                      keyword_format='http://so.baike.com/doc/{}&prd=button_doc_search',
-                                     search_prefix='http://so.baike.com',
-                                     item_prefixes=['http://www.baike.com/wiki'],
+                                     search_prefixes=['http://so.baike.com'],
+                                     item_prefixes=['http://www.baike.com/wiki', 'http://www.baike.com/sowiki'],
                                      decompose_selectors=self.decompose_selectors)
 
 

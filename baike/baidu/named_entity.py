@@ -304,14 +304,19 @@ class Constellation(Entity):
         return None
 
 
-'''
 class Food(Entity):
     name = 'FOOD'
+    attrs = set(['主要营养成分', '主要食用功效', '是否含防腐剂', '储藏方法', '口味'])
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
-        if open_tags and infobox:
-'''
+        if infobox:
+            if len(self.attrs.intersection(infobox)) > 0:
+                return self.name
+            if self.infobox['分类'] == '小吃':
+                return self.name
+        return None
+
 
 # 交通线路
 class TrafficLine(Entity):
@@ -355,6 +360,7 @@ class CommonWord(Entity):
 entities = [Location(), Person(), Organization(),
             ChemicalSubstance(), Disease(), Species(),
             Works(), Award(), Language(), Country(), Subject(),
+            Food(),
             Constellation(), Station(), TrafficLine(), CommonWord()]
 
 
