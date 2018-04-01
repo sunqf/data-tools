@@ -22,6 +22,8 @@ class Entity:
                 return None
         return curr
 
+    def title(self, knowledge):
+        return self.walk(knowledge, ['title'])
     def infobox(self, knowledge):
         return self.walk(knowledge, ['attrs', 'infobox'])
 
@@ -46,13 +48,13 @@ class Location(Entity):
     name = 'LOCATION'
     population = {'人口'}
     area = {'面积', '耕地面积'}
-    address = {'地理位置', '小区地址', '坐标'}
+    address = {'地理位置', '小区地址', '坐标', '所属城市', '所属国家'}
     NO = {'电话区号', '邮政区码', '邮编', '邮政编码', '车牌代码'}
 
     def named(self, knowledge: dict) -> str:
         infobox = self.infobox(knowledge)
         if infobox:
-            if len(self.address.intersection(infobox)) > 0 and \
+            if (len(self.address.intersection(infobox)) > 0 or len(self.population.intersection(infobox)) > 0) and \
                     (len(self.area.intersection(infobox)) > 0 or
                      len(self.NO.intersection(infobox)) > 0):
                 return self.name
@@ -74,7 +76,7 @@ class Person(Entity):
     address = {'出生地', '国籍', '籍贯', '祖籍', '现居地', '现居'}
     date = {'生日', '出生时间', '出生日期' '逝世日期', '去世时间', '入党时间'}
     alias = {'别号', '别名', '别称', '本名', '字号', '谥号', '原名'}
-    misc = {'年龄', '毕业院校', '身高', '体重', '星座', '民族族群', '性别', '主要成就'}
+    misc = {'年龄', '毕业院校', '身高', '体重', '星座', '民族族群', '性别', '主要成就', '代表作品'}
 
     def named(self, knowledge: dict) -> object:
         infobox = self.infobox(knowledge)
@@ -113,7 +115,7 @@ class Organization(Entity):
 
     hospital_info = {'医院院长', '医院类别', '医院性质', '医院等级', '医院名称', '医院性质', '医保定点'}
     misc_info = {'业务主管', '主席', '现任院长', '拥有者', '局长', '党委书记', '创办人',
-                 '组织状态', '主管单位', '主管部门'}
+                 '组织状态', '主管单位', '主管部门', '会长', '名誉会长'}
 
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
@@ -122,9 +124,8 @@ class Organization(Entity):
 
         infobox = self.infobox(knowledge)
         if infobox:
-            if len(self.found_date.intersection(infobox)) > 0 and \
-                    len(self.address.intersection(infobox)) > 0 and \
-                    (len(self.company_info.intersection(infobox)) > 0 or
+            if (len(self.found_date.intersection(infobox)) > 0 or len(self.address.intersection(infobox)) > 0) \
+                and (len(self.company_info.intersection(infobox)) > 0 or
                      len(self.school_info.intersection(infobox)) > 0 or
                      len(self.hospital_info.intersection(infobox)) > 0 or
                      len(self.NO.intersection(infobox)) > 0 or
@@ -161,10 +162,13 @@ class ChemicalSubstance(Entity):
 
 class Disease(Entity):
     name = 'DISEASE'
-
+    attrs = set(['发病部位', '就诊科室', '常见发病部位', '常见病因', '主要症状', '多发群体', '传染性'])
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
         if open_tags and '科学百科疾病症状分类' in open_tags:
+            return self.name
+        infobox = self.infobox(knowledge)
+        if len(self.attrs.intersection(infobox)) > 2:
             return self.name
         return None
 
@@ -243,6 +247,7 @@ class Language(Entity):
             if '语系' in infobox and '语言' in open_tags:
                 return self.name
         return None
+
 
 # 事件
 class Event(Entity):
@@ -354,13 +359,17 @@ class CommonWord(Entity):
         if open_tags and (len(open_tags) == 1 and ('成语' in open_tags or '字词' in open_tags) or
                           (len(open_tags) >= 2 and '字词' in open_tags and '语言' in open_tags)):
             return self.name
+        title = self.title(knowledge)
+        if title and ('汉语词语' in title or '词语' in title):
+            return self.name
+
         return None
 
 
 entities = [Location(), Person(), Organization(),
             ChemicalSubstance(), Disease(), Species(),
             Works(), Award(), Language(), Country(), Subject(),
-            Food(),
+            Food(), Event(),
             Constellation(), Station(), TrafficLine(), CommonWord()]
 
 
