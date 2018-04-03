@@ -15,7 +15,7 @@ async def stat(num_workers, worker_id):
     db = await utils.connect()
     async with db.transaction():
         async for record in db.cursor(
-                f'select url, html from baike_html where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
+                f'select url, html from baike_html where type=\'baidu_baike\' and id % {num_workers} = {worker_id} limit 10000'):
             url = record['url']
             html = utils.decompress(record['html'])
             tree = BeautifulSoup(html, 'html.parser')
@@ -38,9 +38,10 @@ def worker(num_workers, worker_id):
 async def run(loop):
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         workers = [loop.run_in_executor(executor, worker, num_workers, id) for id in range(num_workers)]
-        return reduce(lambda x, y: x.update(await y),
-                      asyncio.as_completed(workers),
-                      initial=Counter())
+        def _merge(x, y):
+            x.update(y)
+            return x
+        return reduce(_merge, [await w for w in asyncio.as_completed(workers)])
 
 
 num_workers = 10

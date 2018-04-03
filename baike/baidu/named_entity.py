@@ -39,7 +39,7 @@ class Entity:
 '''
 select key, count(*) as count
   from (select json_object_keys(knowledge->'attrs'->'infobox') as key 
-    from baike_knowledge2
+    from baike_knowledge
     where ( knowledge->'attrs'->'infobox' )::jsonb ?| array['邮政区码', '面积', '人口', '坐标']) as keys
   group by key
   order by count
@@ -88,7 +88,7 @@ class Location(Entity):
 '''
 select key, count(*) as count
   from (select json_object_keys(knowledge->'attrs'->'infobox') as key
-    from baike_knowledge2
+    from baike_knowledge
     where ( knowledge->'attrs'->'infobox' )::jsonb ?| array['出生地']) as keys
   group by key
   order by count
@@ -114,7 +114,7 @@ class Person(Entity):
 '''
 select key, count(*) as count
   from (select json_object_keys(knowledge->'attrs'->'infobox') as key
-    from baike_knowledge2
+    from baike_knowledge
     where (knowledge->'attrs'->'open_tags')::jsonb ?| array[
                                                   '组织机构', '教育机构', '科研机构', '旅游机构', '政府机构', '国家机构', '法律机构',
                                                   '医疗机构', '培训机构', '文化机构', '公共机构'
@@ -161,7 +161,7 @@ class Organization(Entity):
 '''
 select key, count(*) as count
   from (select json_object_keys(knowledge->'attrs'->'infobox') as key
-    from baike_knowledge2
+    from baike_knowledge
     where (knowledge->'attrs'->'infobox')::jsonb ?| array['CAS号', 'CAS RN', '分子式']) as keys
   group by key
   order by count
@@ -233,7 +233,7 @@ class Works(Entity):
 select key, count(*) as count
   from (
     select json_object_keys(knowledge->'attrs'->'infobox') as key
-    from baike_knowledge2
+    from baike_knowledge
     where (knowledge->'attrs'->'open_tags')::jsonb ?| array['奖项']
         and (knowledge->'attrs'->'infobox')::jsonb ?| array['创立时间', '颁发机构', '颁奖地点', '举办者', '历届得主', '获奖人', '提名单位', '颁发时间', '奖励范围', '开始评奖', '表扬对象']) as keys
   group by key
@@ -259,7 +259,7 @@ class Award(Entity):
 select key, count(*) as count
   from (
     select json_object_keys(knowledge->'attrs'->'infobox') as key
-    from baike_knowledge2
+    from baike_knowledge
     where (knowledge->'attrs'->'infobox')::jsonb ?| array['语系']
       and (knowledge->'attrs'->'open_tags')::jsonb ?| array['语言']) as keys
   group by key
@@ -298,7 +298,7 @@ class Event(Entity):
 # 专业， 学科
 ''' 
     select *
-    from baike_knowledge2
+    from baike_knowledge
     where (knowledge->'attrs'->'infobox')::jsonb ?| array['学科代码', '授予学位']
 '''
 
@@ -318,7 +318,7 @@ class Subject(Entity):
 
 '''
 select *
-    from baike_knowledge2
+    from baike_knowledge
     where (knowledge->'attrs'->'infobox')::jsonb ?| array['政治体制', '国歌', '国家领袖']
 '''
 
@@ -413,7 +413,7 @@ async def _extract_entity(num_workers, worker_id):
     url2entity = dict()
     async with reader.transaction():
         async for record in reader.cursor(
-                f'select url, knowledge from baike_knowledge2 where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
+                f'select url, knowledge from baike_knowledge where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
             url = record['url']
             knowledge = json.loads(record['knowledge'])
             names = []
@@ -439,7 +439,10 @@ async def extract_entity(loop, num_workers):
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         workers = [loop.run_in_executor(executor, extract_worker, num_workers, id)
                    for id in range(num_workers)]
-        return reduce(lambda x, y: x.update(y), asyncio.as_completed(workers), initial=dict())
+        def _merge(d1, d2):
+            d1.update(d2)
+            return d1
+        return reduce(_merge, [await w for w in asyncio.as_completed(workers)])
 
 
 def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
