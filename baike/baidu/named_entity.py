@@ -7,6 +7,7 @@ from .. import utils
 import json
 from bs4 import BeautifulSoup, PageElement, NavigableString, Tag
 from urllib.parse import urljoin, unquote
+from functools import reduce
 
 
 # reference https://thesai.org/Downloads/Volume5No7/Paper_25-Identifying_and_Extracting_Named_Entities.pdf
@@ -24,6 +25,7 @@ class Entity:
 
     def title(self, knowledge):
         return self.walk(knowledge, ['title'])
+
     def infobox(self, knowledge):
         return self.walk(knowledge, ['attrs', 'infobox'])
 
@@ -43,11 +45,12 @@ select key, count(*) as count
   order by count
 '''
 
+
 class Location(Entity):
     name = 'LOCATION'
     population = {'人口'}
     area = {'面积', '耕地面积', '占地总面积', '规划建筑面积'}
-    address = {'地理位置', '小区地址', '坐标', '所属城市', '所属国家'}
+    address = {'地理位置', '小区地址', '位于', '坐标', '所属城市', '所属国家'}
     NO = {'电话区号', '邮政区码', '邮编', '邮政编码', '车牌代码'}
 
     airport = {'机场代码', '航站楼面积', '通航日期', '机场类型', '航站楼面积', '旅客吞吐量', '起降架次'}
@@ -57,6 +60,7 @@ class Location(Entity):
     river = {'流域总面积', '河宽', '河长', '所属水系', '流经地区', '流域面积', '世界长河排名', '主要支流'}
 
     scenic_spots = {'最佳游玩季节', '建议游玩时长', '开放时间', '适宜游玩季节', '景点级别', '门票价格'}
+
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -102,7 +106,7 @@ class Person(Entity):
         infobox = self.infobox(knowledge)
         if infobox:
             if (len(self.address.intersection(infobox)) > 0 or len(self.date.intersection(infobox)) > 0) and \
-                (len(self.alias.intersection(infobox)) > 0 or len(self.misc.intersection(infobox)) > 0):
+                    (len(self.alias.intersection(infobox)) > 0 or len(self.misc.intersection(infobox)) > 0):
                 return self.name
         return None
 
@@ -144,11 +148,12 @@ class Organization(Entity):
 
         infobox = self.infobox(knowledge)
         if infobox:
-            if (len(self.found_date.intersection(infobox)) > 0 or len(self.address.intersection(infobox)) > 0 or len(self.NO.intersection(infobox)) > 0) \
-                and (len(self.company_info.intersection(infobox)) > 0 or
-                     len(self.school_info.intersection(infobox)) > 0 or
-                     len(self.hospital_info.intersection(infobox)) > 0 or
-                     len(self.misc_info.intersection(infobox)) > 0):
+            if (len(self.found_date.intersection(infobox)) > 0 or len(self.address.intersection(infobox)) > 0 or len(
+                    self.NO.intersection(infobox)) > 0) \
+                    and (len(self.company_info.intersection(infobox)) > 0 or
+                         len(self.school_info.intersection(infobox)) > 0 or
+                         len(self.hospital_info.intersection(infobox)) > 0 or
+                         len(self.misc_info.intersection(infobox)) > 0):
                 return self.name
         return None
 
@@ -182,6 +187,7 @@ class ChemicalSubstance(Entity):
 class Disease(Entity):
     name = 'DISEASE'
     attrs = {'发病部位', '就诊科室', '常见发病部位', '常见病因', '主要症状', '多发群体', '传染性'}
+
     def named(self, knowledge: dict) -> str:
         open_tags = self.open_tags(knowledge)
         if open_tags and '科学百科疾病症状分类' in open_tags:
@@ -195,6 +201,7 @@ class Disease(Entity):
 class Species(Entity):
     name = 'SPECIES'
     infos = {'界', '门', '亚门', '纲', '亚纲', '目', '亚目', '科', '亚科', '属', '亚属', '种', '亚种'}
+
     def named(self, knowledge: dict) -> str:
         infobox = self.infobox(knowledge)
         if infobox and len(self.infos.intersection(infobox)) >= 2:
@@ -221,6 +228,7 @@ class Works(Entity):
                 return self.name
         return None
 
+
 '''
 select key, count(*) as count
   from (
@@ -237,6 +245,7 @@ class Award(Entity):
     name = 'AWARD'
     tags = {'奖项'}
     attrs = {'创立时间', '时间', '原则', '立足于', '颁发机构', '颁奖地点', '举办者', '历届得主', '获奖人', '提名单位', '颁发时间', '奖励范围', '开始评奖', '表扬对象'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.open_tags(knowledge)
@@ -244,6 +253,7 @@ class Award(Entity):
             if len(self.tags.intersection(open_tags)) > 0 and len(self.attrs.intersection(open_tags)):
                 return self.name
         return None
+
 
 '''
 select key, count(*) as count
@@ -255,9 +265,12 @@ select key, count(*) as count
   group by key
   order by count
 '''
+
+
 class Language(Entity):
     name = 'LANGUAGE'
     attrs = {'语系', '语族'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -272,6 +285,7 @@ class Event(Entity):
     name = 'EVENT'
     attrs = {'发生时间', '时间', '持续时间', '结束时间', '发生地'}
     tags = {'事件', '历史事件', '外国历史事件', '古代历史事件', '现代历史事件'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -279,6 +293,7 @@ class Event(Entity):
             if '时间' in infobox and '历史事件' in open_tags:
                 return self.name
         return None
+
 
 # 专业， 学科
 ''' 
@@ -300,14 +315,18 @@ class Subject(Entity):
                 return self.name
         return None
 
+
 '''
 select *
     from baike_knowledge2
     where (knowledge->'attrs'->'infobox')::jsonb ?| array['政治体制', '国歌', '国家领袖']
 '''
+
+
 class Country(Entity):
     name = 'COUNTRY'
     attrs = {'政治体制', '国歌', '国家领袖'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -316,10 +335,12 @@ class Country(Entity):
                 return self.name
         return None
 
+
 class Constellation(Entity):
     name = 'CONSTELLATION'
     tags = {'科学百科天文学分类', '天体'}
     attrs = {'绕转周期', '星座', '距离', '发现时间', '发现者', '直径', '距地距离', '公转周期'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -332,6 +353,7 @@ class Constellation(Entity):
 class Food(Entity):
     name = 'FOOD'
     attrs = {'主要营养成分', '主要食用功效', '是否含防腐剂', '储藏方法', '口味'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -347,6 +369,7 @@ class Food(Entity):
 class TrafficLine(Entity):
     name = 'TRAFFIC_LINE'
     attrs = {'国家编号', '编号', '起点', '终点', '全程'}
+
     def named(self, knowledge: dict):
         open_tags = self.open_tags(knowledge)
         infobox = self.infobox(knowledge)
@@ -360,16 +383,14 @@ class TrafficLine(Entity):
 class CommonWord(Entity):
     name = 'O'
     lang_detector = Language()
-    attrs = {'词义', '意思', '释义'}
+    attrs = {'词义', '意思', '释义', '基本解释'}
+
     def named(self, knowledge: dict) -> str:
         if self.lang_detector.named(knowledge):
             return None
         open_tags = self.open_tags(knowledge)
-        if open_tags and (('语言' in open_tags and len(open_tags) == 1) or
-                          ('字词' in open_tags and '成语' in open_tags)) > 0:
-            return self.name
-        title = self.title(knowledge)
-        if title and ('汉语词语' in title or '词语' in title):
+        if open_tags and (('成语' in open_tags and len(open_tags) == 1) or
+                          ('字词' in open_tags and '语言' in open_tags)):
             return self.name
 
         infobox = self.infobox(knowledge)
@@ -386,12 +407,13 @@ entities = [Location(), Person(), Organization(),
             Constellation(), TrafficLine(), CommonWord()]
 
 
-async def extract_entity():
+async def _extract_entity(num_workers, worker_id):
     reader = await utils.connect()
     writer = await utils.connect()
     url2entity = dict()
     async with reader.transaction():
-        async for record in reader.cursor('select url, knowledge from baike_knowledge2 where type=\'baidu_baike\''):
+        async for record in reader.cursor(
+                f'select url, knowledge from baike_knowledge2 where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
             url = record['url']
             knowledge = json.loads(record['knowledge'])
             names = []
@@ -400,11 +422,24 @@ async def extract_entity():
                 if name:
                     names.append(name)
             async with writer.transaction():
-                await writer.execute('INSERT INTO url_label (url, label, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-                               url, json.dumps({'entity_type': names}), 'baidu_baike')
+                await writer.execute(
+                    'INSERT INTO url_label (url, label, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                    url, json.dumps({'entity_type': names}), 'baidu_baike')
             if len(names) == 1:
                 url2entity[url] = names[0]
     return url2entity
+
+
+def extract_worker(num_workers, worker_id):
+    loop = asyncio.new_event_loop()
+    return loop.run_until_complete(_extract_entity(num_workers, worker_id))
+
+
+async def extract_entity(loop, num_workers):
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        workers = [loop.run_in_executor(executor, extract_worker, num_workers, id)
+                   for id in range(num_workers)]
+        return reduce(lambda x, y: x.update(y), asyncio.as_completed(workers), initial=dict())
 
 
 def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
@@ -461,7 +496,7 @@ if __name__ == '__main__':
     import sys
 
     loop = asyncio.get_event_loop()
-    url2entity = loop.run_until_complete(extract_entity())
+    url2entity = loop.run_until_complete(extract_entity(loop, 10))
 
 '''
     print('labeling links in html.')
