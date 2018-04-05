@@ -9,6 +9,7 @@ import asyncpg
 from tqdm import tqdm
 from bs4 import BeautifulSoup, Tag
 from corpus.util.config import *
+from corpus.bicorpus import db
 from logging import *
 
 getLogger().setLevel(INFO)
@@ -149,7 +150,7 @@ class BingCrawler:
 
     @classmethod
     async def create(cls, loop, keywords, max_worker=10):
-        db_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf', command_timeout=60, loop=loop)
+        db_pool = await db.connect_pool()
 
         async with db_pool.acquire() as db_conn:
             async with db_conn.transaction():

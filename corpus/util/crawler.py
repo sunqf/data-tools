@@ -6,6 +6,7 @@ import posixpath
 from logging import *
 from corpus.util.config import *
 from corpus.util.headless import Headless
+from corpus.bicorpus import db
 from typing import Set, Optional, AsyncGenerator
 from bs4 import UnicodeDammit, BeautifulSoup
 import re
@@ -110,7 +111,7 @@ class BaseCrawler:
 
     async def main(self):
 
-        db_conn = await asyncpg.connect(host='localhost', user='sunqf', database='sunqf')
+        db_conn = await db.connect()
 
         async with db_conn.transaction():
             records = await db_conn.fetch("SELECT url from raw_html where type='%s'" % self.type)

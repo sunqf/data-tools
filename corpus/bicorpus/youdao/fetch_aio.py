@@ -10,6 +10,7 @@ import re
 import traceback
 
 from corpus.util.config import *
+from corpus.bicorpus import db
 
 headers = {
     'Connection': 'keep-alive',
@@ -212,7 +213,7 @@ async def main(keywords: List[str], direction: str):
     # create instance of Semaphore
     sem = asyncio.Semaphore(200)
 
-    db_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf')
+    db_pool = await db.connect_pool()
 
     async with db_pool.acquire() as reader:
         async with reader.transaction():

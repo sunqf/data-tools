@@ -4,7 +4,7 @@
 import argparse
 import re
 import json
-
+from corpus.bicorpus import db
 from concurrent.futures import ProcessPoolExecutor
 
 import asyncio
@@ -103,7 +103,7 @@ def correct(pairs):
 
 
 async def extract(loop, func, field):
-    conn_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf')
+    conn_pool = await db.connect_pool()
 
     async with conn_pool.acquire() as reader:
         async with conn_pool.acquire() as writer:

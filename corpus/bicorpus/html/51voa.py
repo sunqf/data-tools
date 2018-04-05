@@ -17,7 +17,7 @@ class _51VOA(HttpCrawler):
         self.multi_page_selector = '#EnPage'
 
     async def get_urls(self):
-        async for url in self.get_url_from_page(set([host]), self.article_selector, self.page_selector):
+        async for url in self.get_url_from_page(set([self.host]), self.article_selector, self.page_selector):
             yield url
 
     def select_multi_page(self, url, content: BeautifulSoup):

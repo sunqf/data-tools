@@ -6,6 +6,7 @@ import asyncpg
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 import concurrent
+from corpus.bicorpus import db
 
 
 # Do ' nt think about the way things might has been. -> Do'nt think about the way things might has been.
@@ -69,7 +70,7 @@ async def fetch(loop, executor, db_conn):
 
 async def extract(loop, executor):
 
-    conn_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf')
+    conn_pool = await db.connect_pool()
 
     async with conn_pool.acquire() as reader:
         async with conn_pool.acquire() as writer:

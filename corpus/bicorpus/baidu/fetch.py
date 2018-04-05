@@ -11,6 +11,7 @@ from logging import *
 from corpus.util.headless import Headless
 from corpus.util import lang_detect
 from selenium.webdriver.common.by import By
+from corpus.bicorpus import db
 
 getLogger().setLevel(INFO)
 
@@ -137,7 +138,7 @@ class BaiduCrawler:
 
     @classmethod
     async def create(cls, loop, keywords, headless):
-        db_pool = await asyncpg.create_pool(host='localhost', user='sunqf', database='sunqf', command_timeout=60, loop=loop)
+        db_pool = await db.connect_pool()
 
         async with db_pool.acquire() as db_conn:
             async with db_conn.transaction():

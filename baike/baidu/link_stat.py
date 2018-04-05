@@ -9,13 +9,15 @@ import sys
 import concurrent
 import asyncio
 from functools import reduce
+from itertools import accumulate
+
 
 async def stat(num_workers, worker_id):
     counter = Counter()
     db = await utils.connect()
     async with db.transaction():
         async for record in db.cursor(
-                f'select url, html from baike_html where type=\'baidu_baike\' and id % {num_workers} = {worker_id} limit 10000'):
+                f'select url, html from baike_html where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
             url = record['url']
             html = utils.decompress(record['html'])
             tree = BeautifulSoup(html, 'html.parser')
@@ -42,6 +44,11 @@ async def run(loop):
             x.update(y)
             return x
         return reduce(_merge, [await w for w in asyncio.as_completed(workers)])
+
+
+def ratio(counter: list):
+    total = reduce(lambda x, y: x[1] + y[1], counter)
+    ratio = [(word, count, count/total) for word, count in accumulate(counter, lambda x, y: (y[0], x[1]+y[1]))]
 
 
 num_workers = 10

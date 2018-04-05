@@ -5,6 +5,7 @@
 import asyncio
 import asyncpg
 import re
+from corpus.bicorpus import db
 
 _sep = re.compile('[;,：，/ ]')
 
@@ -13,7 +14,7 @@ async def build():
 
     terms = set()
 
-    db_conn = await asyncpg.connect(host='localhost', user='sunqf', database='sunqf', command_timeout=60)
+    db_conn = await db.connect()
 
     async with db_conn.transaction():
         records = await db_conn.fetch('SELECT ch, en from dictall_term')

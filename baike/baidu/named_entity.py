@@ -8,7 +8,7 @@ import json
 from bs4 import BeautifulSoup, PageElement, NavigableString, Tag
 from urllib.parse import urljoin, unquote
 from functools import reduce
-
+import traceback
 
 # reference https://thesai.org/Downloads/Volume5No7/Paper_25-Identifying_and_Extracting_Named_Entities.pdf
 
@@ -412,6 +412,7 @@ async def _extract_entity(num_workers, worker_id):
     writer = await utils.connect()
     url2entity = dict()
     async with reader.transaction():
+        buffer = []
         async for record in reader.cursor(
                 f'select url, knowledge from baike_knowledge where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
             url = record['url']
@@ -421,12 +422,25 @@ async def _extract_entity(num_workers, worker_id):
                 name = entity.named(knowledge)
                 if name:
                     names.append(name)
-            async with writer.transaction():
-                await writer.execute(
-                    'INSERT INTO url_label (url, label, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-                    url, json.dumps({'entity_type': names}), 'baidu_baike')
+            buffer.append((url, names))
+            if len(buffer) > 1000:
+                try:
+                    async with writer.transaction():
+                        await writer.executemany(
+                            'INSERT INTO url_label (url, label, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                            [(url, json.dumps({'entity_type': names}), 'baidu_baike') for url, names in buffer])
+                except Exception as e:
+                    print(e)
+                    traceback.print_exc()
+
+                buffer = []
             if len(names) == 1:
                 url2entity[url] = names[0]
+        if len(buffer) > 0:
+            async with writer.transaction():
+                await writer.executemany(
+                    'INSERT INTO url_label (url, label, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                    [(url, json.dumps({'entity_type': names}), 'baidu_baike') for url, names in buffer])
     return url2entity
 
 

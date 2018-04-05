@@ -7,6 +7,7 @@ import asyncpg
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 from corpus.util.config import *
+from corpus.bicorpus import db
 
 headers = {
     'Connection': 'keep-alive',
@@ -101,7 +102,7 @@ async def main(keywords: List[str], direction: str):
     # create instance of Semaphore
     sem = asyncio.Semaphore(100)
 
-    db_conn = await asyncpg.connect(host='localhost', user='sunqf', database='sunqf')
+    db_conn = await db.connect()
 
     async with db_conn.transaction():
         records = await db_conn.fetch('SELECT keyword from iciba')
