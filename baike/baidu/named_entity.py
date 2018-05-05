@@ -459,18 +459,13 @@ async def extract_entity(loop, num_workers):
         return reduce(_merge, [await w for w in asyncio.as_completed(workers)])
 
 
-def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
+def label(url, html: str):
     def _label(node: PageElement):
         if isinstance(node, NavigableString):
             text = node.strip()
             parent = node.parent
             if parent.name == 'a' and 'href' in parent.attrs:
-                if parent.attrs['href'] in url2type:
-                    type = url2type[parent.attrs['href']]
-                    url2count[parent.attrs['href']] += 1
-                    yield '[[[{}|||{}|||{}]]]'.format(text, type, parent.attrs['href'])
-                else:
-                    yield '[[[{}|||{}|||{}]]]'.format(text, '*', parent.attrs['href'])
+                yield '[[[{}|||{}]]]'.format(text, parent.attrs['href'])
             else:
                 yield text
         elif isinstance(node, Tag):
@@ -485,8 +480,7 @@ def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
         for a in para.select('a[href]'):
             new_url = unquote(urljoin(url, a.attrs['href']))
             a.attrs['href'] = new_url
-            if new_url in url2type:
-                found = True
+            found = True
 
         if found and len(para.text) > 20:
             paras.add(para)
@@ -494,18 +488,28 @@ def label(url2type: Mapping[str, str], url2count: Counter, url, html: str):
     return [''.join(_label(para)) for para in paras]
 
 
-async def extract_label(url2entity: Mapping, output: TextIO, loop):
-    url2count = Counter()
+async def _extract_label(output, num_workers, worker_id):
     reader = await utils.connect()
-    with concurrent.futures.ProcessPoolExecutor(max_workers=5) as executor:
-        async with reader.transaction():
-            async for record in reader.cursor('select url, html from baike_html where type=\'baidu_baike\''):
+    async with reader.transaction():
+        with open(output + '.' + num_workers, 'w') as output:
+            async for record in reader.cursor(
+                    f'select url, html from baike_html where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
                 url = record['url']
                 html = utils.decompress(record['html'])
-                for sentence in set([sentence for labeled in label(url2entity, url2count, url, html)
-                                     for sentence in utils.splitter(labeled) if sentence.find('[[[') > 0]):
+                for sentence in set([sentence for labeled in label(url, html)
+                                     for sentence in utils.splitter(labeled) if sentence.find('[[[') >= 0]):
                     output.write(sentence + '\n')
-    return url2count
+
+
+def label_worker(output, num_workers, worker_id):
+    loop = asyncio.new_event_loop()
+    return loop.run_until_complete(_extract_label(output, num_workers, worker_id))
+
+
+async def extract_label(loop, output, num_workers):
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        workers = [loop.run_in_executor(executor, label_worker, output, num_workers, id)
+                   for id in range(num_workers)]
 
 
 if __name__ == '__main__':
@@ -513,13 +517,13 @@ if __name__ == '__main__':
     import sys
 
     loop = asyncio.get_event_loop()
-    url2entity = loop.run_until_complete(extract_entity(loop, 10))
+    # url2entity = loop.run_until_complete(extract_entity(loop, 10))
+
+
+    print('labeling links in html.')
+    loop.run_until_complete(extract_label(loop, sys.argv[1], 10))
 
 '''
-    print('labeling links in html.')
-    with open(sys.argv[1], 'w') as data:
-        url2count = loop.run_until_complete(extract_label(url2entity, data, loop))
-
     with open('entity.count', 'w') as data:
         for url, count in url2count.most_common():
             data.write('{}\t{}\t{}'.format(url, url2entity[url], count))
