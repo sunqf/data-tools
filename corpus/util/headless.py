@@ -34,7 +34,8 @@ class Headless:
         if self.use_proxy:
             proxy = await fetch_proxy()
             driver_options.add_argument('--proxy-server=%s' % proxy)
-        return webdriver.Chrome(chrome_options=driver_options,
+        return webdriver.Chrome(
+                                chrome_options=driver_options,
                                 service_log_path=self.log_path,
                                 desired_capabilities=self.capab)
 

@@ -1,5 +1,5 @@
 
-CREATE TABLE youdao_bilingual(id SERIAL, keyword VARCHAR, direction VARCHAR, data VARCHAR);
+CREATE TABLE youdao_bilingual(id SERIAL, keyword VARCHAR);
 
 CREATE TABLE iciba(id SERIAL, keyword VARCHAR, direction VARCHAR, data VARCHAR);
 
