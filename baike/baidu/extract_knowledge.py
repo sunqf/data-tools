@@ -199,7 +199,7 @@ def extract(html: str):
         attrs['open_tags'] = [t.strip() for t in open_tags.text.split('，')]
 
     check_type(attrs, Tag)
-    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}, title.rsplit('（', maxsplit=0)[0]
+    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}, title[:-len('_百度百科')].rsplit('（', maxsplit=1)[0]
 
 
 def extract_text(html):
