@@ -199,7 +199,7 @@ def extract(html: str):
         attrs['open_tags'] = [t.strip() for t in open_tags.text.split('，')]
 
     check_type(attrs, Tag)
-    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}
+    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}, title.rsplit('（', maxsplit=0)[0]
 
 
 def extract_text(html):
@@ -232,9 +232,9 @@ def decomp_ext_comp(data):
         html = zlib.decompress(html).decode()
         # print(url)
         try:
-            knowledge = extract(html)
+            knowledge, keyword = extract(html)
             knowledge = json.dumps(knowledge, ensure_ascii=False)
-            res.append((url, knowledge))
+            res.append((url, knowledge, keyword))
         except Exception as e:
             print(url, e)
             traceback.print_exc()
@@ -248,8 +248,8 @@ async def extract_worker(loop, executor):
         results = await loop.run_in_executor(executor, decomp_ext_comp, batch)
         async with writer.transaction():
             await writer.executemany(
-                'INSERT INTO baike_knowledge (url, knowledge, type, keyword) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-                [(url, knowledge, type, knowledge['title'].rsplit('（'))[0] for url, knowledge in results])
+                'INSERT INTO baike_knowledge (url, knowledge, type, keyword) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+                [(url, knowledge, type, keyword) for url, knowledge, keyword in results])
         queue.task_done()
 
 async def run():
