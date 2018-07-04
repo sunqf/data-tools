@@ -29,15 +29,18 @@ class Headless:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=pool_size)
 
     async def init_driver(self):
-        driver_options = webdriver.ChromeOptions()
-        driver_options.add_argument('headless')
-        if self.use_proxy:
-            proxy = await fetch_proxy()
-            driver_options.add_argument('--proxy-server=%s' % proxy)
-        return webdriver.Chrome(
-                                chrome_options=driver_options,
+        while True:
+            try:
+                driver_options = webdriver.ChromeOptions()
+                driver_options.add_argument('headless')
+                if self.use_proxy:
+                    proxy = await fetch_proxy()
+                    driver_options.add_argument('--proxy-server=%s' % proxy)
+                return webdriver.Chrome(chrome_options=driver_options,
                                 service_log_path=self.log_path,
                                 desired_capabilities=self.capab)
+            except Exception as e:
+                print(e)
 
     async def init_pool(self, pool_size):
         for i in range(pool_size):

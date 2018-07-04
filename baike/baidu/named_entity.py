@@ -476,13 +476,13 @@ def label(url, html: str):
     html = utils.clean_tag(html)
     paras = set()
     for para in html.select('div.para'):
-        found = False
+        href_len = 0
         for a in para.select('a[href]'):
             new_url = unquote(urljoin(url, a.attrs['href']))
             a.attrs['href'] = new_url
-            found = True
+            href_len += len(a.text)
 
-        if found and len(para.text) > 20:
+        if len(para.text) - href_len > 0:
             paras.add(para)
 
     return [''.join(_label(para)) for para in paras]
@@ -491,10 +491,11 @@ def label(url, html: str):
 async def _extract_label(output, num_workers, worker_id):
     reader = await utils.connect()
     async with reader.transaction():
-        with open(output + '.' + num_workers, 'w') as output:
+        with open('{}.{}'.format(output, worker_id), 'w') as output:
             async for record in reader.cursor(
                     f'select url, html from baike_html where type=\'baidu_baike\' and id % {num_workers} = {worker_id}'):
                 url = record['url']
+                print(url)
                 html = utils.decompress(record['html'])
                 for sentence in set([sentence for labeled in label(url, html)
                                      for sentence in utils.splitter(labeled) if sentence.find('[[[') >= 0]):
@@ -521,7 +522,7 @@ if __name__ == '__main__':
 
 
     print('labeling links in html.')
-    loop.run_until_complete(extract_label(loop, sys.argv[1], 10))
+    loop.run_until_complete(extract_label(loop, sys.argv[1], 5))
 
 '''
     with open('entity.count', 'w') as data:

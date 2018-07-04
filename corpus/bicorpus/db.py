@@ -7,8 +7,9 @@ import asyncpg
 def connect():
     return asyncpg.connect(host='localhost',
                            user='sunqf',
+                           password='840422',
                            database='bilingual',
                            command_timeout=60)
 
 def connect_pool():
-    return asyncpg.create_pool(host='localhost', user='sunqf', database='bilingual')
+    return asyncpg.create_pool(host='localhost', user='sunqf', password='840422', database='bilingual')

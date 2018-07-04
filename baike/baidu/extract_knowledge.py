@@ -5,6 +5,7 @@ import zlib
 from urllib import parse
 from corpus.util.config import headers
 from collections import Iterable
+import re
 import json
 import asyncio
 import asyncpg
@@ -127,8 +128,11 @@ def check_type(data, checked):
             check_type(item, checked)
 
 
-def format_attr_name(word: str) -> str:
-    return word.replace('\xa0', '').strip()
+def format_attr_name(text: str) -> str:
+    text = text.replace('\xa0', '').strip()
+    text = re.sub(r'(?=[^0-9a-zA-Z])( |　)+(?=[^0-9a-zA-Z])', r'', text)
+    text = re.sub(r'( |　)*(:|：)( |　)*$', r'', text)
+    return text
 
 
 def extract(html: str):
@@ -156,9 +160,9 @@ def extract(html: str):
         if len(authority_list) > 0:
             attrs['authority_list'] = authority_list
 
-        summary = poster_tag.select_one('div.lemma-summary > div')
-        if summary:
-            attrs['lemma_summary'] = format_str(summary)
+        summary = [format_str(tag) for tag in poster_tag.select('div.lemma-summary')]
+        if len(summary) > 0:
+            attrs['lemma_summary'] = summary
 
         infobox = [{format_attr_name(tag.dt.text): format_str(tag.dd)} for tag in poster_tag.select('dl-baseinfo')]
         if len(infobox) > 0:
@@ -170,9 +174,11 @@ def extract(html: str):
             attrs['lemma_title'] = lemma_title.text.strip()
 
     if 'lemma_summary' not in attrs:
-        lemma_summary = html.select_one('div.lemma-summary > div')
-        if lemma_summary:
-            attrs['lemma_summary'] = format_str(lemma_summary)
+        lemma_summary = [format_str(tag) for tag in html.select('div.lemma-summary')]
+        if len(lemma_summary) == 0:
+            lemma_summary = [format_str(tag) for tag in html.select('div.main-content > div.para')[0:5]]
+        if len(lemma_summary) > 0:
+            attrs['lemma_summary'] = lemma_summary
 
     names = [format_attr_name(dt.text) for dt in html.select('dt.basicInfo-item')]
     values = [split_infobox_value(dl) for dl in html.select('dd.basicInfo-item')]
@@ -193,7 +199,7 @@ def extract(html: str):
         attrs['open_tags'] = [t.strip() for t in open_tags.text.split('，')]
 
     check_type(attrs, Tag)
-    return {'title': title, 'keywords': keywords, 'attrs': attrs}
+    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}
 
 
 def extract_text(html):
@@ -242,8 +248,8 @@ async def extract_worker(loop, executor):
         results = await loop.run_in_executor(executor, decomp_ext_comp, batch)
         async with writer.transaction():
             await writer.executemany(
-                'INSERT INTO baike_knowledge2 (url, knowledge, type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-                [(url, knowledge, type) for url, knowledge in results])
+                'INSERT INTO baike_knowledge (url, knowledge, type, keyword) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                [(url, knowledge, type, knowledge['title'].rsplit('（'))[0] for url, knowledge in results])
         queue.task_done()
 
 async def run():
