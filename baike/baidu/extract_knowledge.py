@@ -27,12 +27,15 @@ def build_tree(html: str) -> Tag:
 
 
 def format_str(tag: Tag) -> str:
+    if len(tag.text.strip()) == 0:
+        return ''
+
     tag.name = 'div'
     tag.attrs.clear()
 
     tag = utils.clean_tag(tag)
 
-    return str(tag)
+    return str(tag).replace('\u0000', '')
 
 
 class PunctuationCounter:
@@ -130,8 +133,8 @@ def check_type(data, checked):
 
 def format_attr_name(text: str) -> str:
     text = text.replace('\xa0', '').strip()
-    text = re.sub(r'(?=[^0-9a-zA-Z])( |　)+(?=[^0-9a-zA-Z])', r'', text)
-    text = re.sub(r'( |　)*(:|：)( |　)*$', r'', text)
+    text = re.sub(r'(?=[^0-9a-zA-Z])( |　|\xa0|\u0000)+(?=[^0-9a-zA-Z])', r'', text)
+    text = re.sub(r'( |　|\xa0|\u0000)*(:|：)( |　|\xa0|\u0000)*$', r'', text)
     return text
 
 
@@ -152,15 +155,19 @@ def extract(html: str):
     poster_tag = html.find(class_='poster')
     if poster_tag:
         lemma_title = poster_tag.select_one('dd.lemmaWgt-lemmaTitle-title > h1')
-        if title:
+        if lemma_title:
             attrs['lemma_title'] = lemma_title.text.strip()
+            lemma_title2 = poster_tag.select_one('dd.lemmaWgt-lemmaTitle-title > h2')
+            if lemma_title2:
+                attrs['lemma_title2'] = lemma_title2.text.strip()
+
 
         authority_list = [{'href': tag.attrs['href'], 'name': tag.text.strip()}
                           for tag in poster_tag.select('div.authorityListPrompt > div > a')]
         if len(authority_list) > 0:
             attrs['authority_list'] = authority_list
 
-        summary = [format_str(tag) for tag in poster_tag.select('div.lemma-summary')]
+        summary = [format_str(tag) for tag in poster_tag.select('div.lemma-summary > div.para')]
         if len(summary) > 0:
             attrs['lemma_summary'] = summary
 
@@ -172,9 +179,12 @@ def extract(html: str):
         lemma_title = html.select_one('dd.lemmaWgt-lemmaTitle-title > h1')
         if lemma_title:
             attrs['lemma_title'] = lemma_title.text.strip()
+            lemma_title2 = poster_tag.select_one('dd.lemmaWgt-lemmaTitle-title > h2')
+            if lemma_title2:
+                attrs['lemma_title2'] = lemma_title2.text.strip()
 
     if 'lemma_summary' not in attrs:
-        lemma_summary = [format_str(tag) for tag in html.select('div.lemma-summary')]
+        lemma_summary = [format_str(tag) for tag in html.select('div.lemma-summary > div.para')]
         if len(lemma_summary) == 0:
             lemma_summary = [format_str(tag) for tag in html.select('div.main-content > div.para')[0:5]]
         if len(lemma_summary) > 0:
@@ -183,6 +193,14 @@ def extract(html: str):
     names = [format_attr_name(dt.text) for dt in html.select('dt.basicInfo-item')]
     values = [split_infobox_value(dl) for dl in html.select('dd.basicInfo-item')]
     info_box = {name: value for name, value in zip(names, values)}
+
+    if len(info_box) == 0:
+        # https://baike.baidu.com/item/%E7%BB%86%E8%83%9E%E8%89%B2%E7%B4%A0P450%E8%BF%98%E5%8E%9F%E9%85%B6/5511954
+        science_infobox = html.select_one('div.spe-mod-scienceWord > div.sWord-main')
+        if science_infobox:
+            names = [format_attr_name(dt.text) for dt in science_infobox.select('dt')]
+            values = [split_infobox_value(dl) for dl in science_infobox.select('dd')]
+            info_box = {name: value for name, value in zip(names, values)}
 
     if len(info_box) > 0:
         attrs['infobox'] = info_box
@@ -199,7 +217,7 @@ def extract(html: str):
         attrs['open_tags'] = [t.strip() for t in open_tags.text.split('，')]
 
     check_type(attrs, Tag)
-    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}, title[:-len('_百度百科')].rsplit('（', maxsplit=1)[0]
+    return {'title': title[:-len('_百度百科')], 'keywords': keywords, 'attrs': attrs}, title[:-len('_百度百科')].split('（', maxsplit=1)[0]
 
 
 def extract_text(html):
@@ -263,8 +281,39 @@ async def run():
         for task in tasks:
             task.cancel()
 
+async def shard_extract(shard_size, shard_id, batch_size=100):
+    reader = await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf',
+                                   command_timeout=60)
+    writer = await asyncpg.connect(host='localhost', user='sunqf', password='840422', database='sunqf', command_timeout=60)
+    batch = []
+    async with reader.transaction(isolation='serializable', readonly=True):
+        async for record in reader.cursor('SELECT url, html from baike_html where type=\'{}\' and id%{}={}'.format(type, shard_size, shard_id)):
+            url = record['url']
+            html = zlib.decompress(record['html'])
+            batch.append((url, record['html']))
+            if len(batch) >= batch_size:
+                results = decomp_ext_comp(batch)
+                async with writer.transaction():
+                    await writer.executemany(
+                        'INSERT INTO baike_knowledge (url, knowledge, type, keyword) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+                        [(url, knowledge, type, keyword) for url, knowledge, keyword in results])
+                batch = []
+    if len(batch) > 0:
+        results = decomp_ext_comp(batch)
+        async with writer.transaction():
+            await writer.executemany(
+                    'INSERT INTO baike_knowledge (url, knowledge, type, keyword) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+                    [(url, knowledge, type, keyword) for url, knowledge, keyword in results])
+
+def shard_worker(shard_size, shard_id, batch_size):
+    loop = asyncio.new_event_loop()
+    return loop.run_until_complete(shard_extract(shard_size, shard_id, batch_size))
+
+async def shard_run(loop, shard_size=5):
+    with concurrent.futures.ProcessPoolExecutor(max_workers=shard_size) as executor:
+        tasks = [loop.run_in_executor(executor, shard_worker, shard_size, i, 200) for i in range(shard_size)]
 
 if __name__ == '__main__':
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(run())
+    loop.run_until_complete(shard_run(loop, 6))
